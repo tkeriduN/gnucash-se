@@ -32547,3 +32547,66 @@ msgstr "Fakturan kunde inte avregistreras. En betalning som är kopplad till den
 #, c-format
 msgid "The scheduled transaction \"%s\" for %s falls in a locked period and was not created. Enter it by hand in an open period and skip this occurrence."
 msgstr "Den schemalagda transaktionen ”%s” för %s hamnar i en låst period och skapades inte. Registrera den för hand i en öppen period och hoppa över den här förekomsten."
+
+msgid "Only a posted transaction is corrected with a correcting entry. A preliminary transaction can be changed as it is."
+msgstr "Bara en bokförd transaktion rättas med en rättelseverifikation. En preliminär transaktion kan ändras som den är."
+
+msgid "A correcting entry is dated in an open period."
+msgstr "En rättelseverifikation dateras i en öppen period."
+
+msgid "A correcting entry says who made it."
+msgstr "En rättelseverifikation ska ange vem som har gjort den."
+
+msgid "The transaction already has a correcting entry."
+msgstr "Transaktionen har redan en rättelseverifikation."
+
+#, c-format
+msgid "Correction of %s: %s"
+msgstr "Rättelse av %s: %s"
+
+msgid "The correcting entry could not be created."
+msgstr "Rättelseverifikationen kunde inte skapas."
+
+#, c-format
+msgid "Corrected by %s, dated %s, signed %s."
+msgstr "Rättad genom %s, daterad %s, signatur %s."
+
+#, c-format
+msgid "%s (%s) is a correcting entry, but the transaction it corrects is missing or not posted."
+msgstr "%s (%s) är en rättelseverifikation, men transaktionen som den rättar saknas eller är inte bokförd."
+
+msgid "The date is in a locked period. A correcting entry is dated in an open period."
+msgstr "Datumet ligger i en låst period. En rättelseverifikation dateras i en öppen period."
+
+msgid "Enter your signature: a correction says who made it."
+msgstr "Ange din signatur: en rättelse ska ange vem som har gjort den."
+
+#, c-format
+msgid "%s already has a correcting entry, %s."
+msgstr "%s har redan en rättelseverifikation, %s."
+
+#, c-format
+msgid "%s already has a correcting entry, which is not posted yet."
+msgstr "%s har redan en rättelseverifikation, som inte är bokförd än."
+
+msgid "Correct a Posted Transaction"
+msgstr "Rätta en bokförd transaktion"
+
+msgid "Create Correcting _Entry"
+msgstr "Skapa _rättelseverifikation"
+
+#, c-format
+msgid "%s (%s) is posted and cannot be changed. A correcting entry takes it back with a voucher of its own, and the two refer to each other."
+msgstr "%s (%s) är bokförd och kan inte ändras. En rättelseverifikation tar tillbaka den med en egen verifikation, och de två hänvisar till varandra."
+
+msgid "Date of the correcting entry:"
+msgstr "Rättelseverifikationens datum:"
+
+msgid "Your signature:"
+msgstr "Din signatur:"
+
+msgid "Reason:"
+msgstr "Anledning:"
+
+msgid "Also create a _copy of the original to put right"
+msgstr "Skapa också en _kopia av originalet att rätta"
