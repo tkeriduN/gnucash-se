@@ -31,6 +31,7 @@
 #include <gnc-commodity.h>
 #include <gnc-date.h>
 #include <gnc-engine.h>
+#include <gnc-uri-utils.h>
 #include <gncCustomer.h>
 #include <gncEntry.h>
 #include <gncInvoice.h>
@@ -940,7 +941,13 @@ protected:
         auto path {g_build_filename (m_dir, "book.gnucash", nullptr)};
         m_path = path;
         g_free (path);
-        m_url = std::string {GetParam ()} + "://" + m_path;
+        /* Let the engine put the scheme and the path together; a path
+         * on Windows has a drive letter and backslashes. */
+        auto url {gnc_uri_create_uri (GetParam (), nullptr, 0, nullptr, nullptr,
+                                      m_path.c_str ())};
+        ASSERT_NE (url, nullptr);
+        m_url = url;
+        g_free (url);
 
         /* The session owns the book. */
         m_session = qof_session_new (qof_book_new ());
