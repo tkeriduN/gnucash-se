@@ -63,7 +63,7 @@ fel; se [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md).
 | [`svenska-krav.md`](svenska-krav.md) | lagkrav och tekniska gränssnitt (BFL, BFNAR, BAS, SIE, moms, deklaration, årsredovisning) |
 | [`avvikelser-mot-upstream.md`](avvikelser-mot-upstream.md) | allt forken ändrar i upstreams filer |
 | [`byggmiljo.md`](byggmiljo.md) | bygga och testa forken |
-| [`design/`](design/) | designskisser, en per funktion |
+| [`design/`](design/) | designskisser, en per funktion: 01 lås och numrering, 02 rättelseverifikation |
 
 Kontoplanen BAS läggs inte in i forken innan rättighetsfrågan är utredd (se `svenska-krav.md`, avsnitt B4).
 

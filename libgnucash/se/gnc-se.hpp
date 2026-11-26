@@ -94,6 +94,15 @@ struct GncSeLockPlan
     std::vector<GncSeLockGroup> groups;
 };
 
+/** The outcome of gnc_se_correct(). */
+struct GncSeCorrection
+{
+    bool ok;                  ///< False if nothing was created; see error.
+    std::string error;
+    Transaction* correction;  ///< The correcting entry, preliminary.
+    Transaction* replacement; ///< A copy of the original to put right, or null.
+};
+
 /** The outcome of gnc_se_lock_through(). */
 struct GncSeLockResult
 {
@@ -113,6 +122,7 @@ enum class GncSeIssueType
     MISSING_READ_ONLY,     ///< A locked transaction has lost its read-only mark.
     LOCKED_AFTER_LOCK_DATE,///< A locked transaction is dated after the lock date.
     UNLOCKED_BEFORE_LOCK_DATE, ///< A preliminary transaction on or before the lock date.
+    CORRECTION_WITHOUT_ORIGINAL, ///< A posted correcting entry whose original is gone or not posted.
 };
 
 /** Something gnc_se_verify() found. */
@@ -206,6 +216,46 @@ std::string gnc_se_trans_get_voucher (const Transaction* trans);
 
 /** What the transaction's num field held before it was locked. */
 std::string gnc_se_trans_get_former_num (const Transaction* trans);
+/** @} */
+
+/** @name Corrections
+ *
+ * A posted transaction is corrected with a correcting entry, a new
+ * transaction with its own voucher (BFNAR 2013:2 points 2.17, 2.18).
+ * The two refer to each other, and the correcting entry says who made
+ * it and why.
+ @{ */
+
+/** Create a correcting entry for a posted transaction: a preliminary
+ *  transaction dated @a date that takes back the original, split by
+ *  split. With @a with_replacement a preliminary copy of the original
+ *  is created as well, to be changed into what should have been
+ *  posted.
+ *
+ *  Nothing is created if the original is not posted or already has a
+ *  correcting entry, if @a date is in the locked period, or if
+ *  @a signature is empty.
+ *
+ *  @param signature Who makes the correction.
+ *  @param reason Why; may be empty. */
+GncSeCorrection gnc_se_correct (Transaction* original, const GDate& date,
+                                const std::string& signature,
+                                const std::string& reason,
+                                bool with_replacement);
+
+/** The correcting entry of a transaction, or null. A correcting entry
+ *  that has been deleted while it was preliminary no longer counts. */
+Transaction* gnc_se_trans_get_correction (const Transaction* original);
+
+/** The transaction that a correcting entry corrects, or null. */
+Transaction* gnc_se_trans_get_corrected (const Transaction* correction);
+
+/** The transaction that this one was created to replace, or null. */
+Transaction* gnc_se_trans_get_replaced (const Transaction* replacement);
+
+/** Who made a correcting entry, and why. */
+std::string gnc_se_trans_get_signature (const Transaction* trans);
+std::string gnc_se_trans_get_reason (const Transaction* trans);
 /** @} */
 
 /** Work out what gnc_se_lock_through() would lock, without changing

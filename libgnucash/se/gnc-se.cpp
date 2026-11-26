@@ -100,6 +100,20 @@ set_int (QofInstance* instance, const Path& path, int64_t value)
     qof_instance_set_path_kvp<int64_t> (instance, value, path);
 }
 
+static const GncGUID*
+get_guid (QofInstance* instance, const Path& path)
+{
+    auto value {qof_instance_get_path_kvp<GncGUID*> (instance, path)};
+    return value ? *value : nullptr;
+}
+
+static void
+set_guid (QofInstance* instance, const Path& path, const GncGUID* guid)
+{
+    /* The slot takes ownership of the copy. */
+    qof_instance_set_path_kvp<GncGUID*> (instance, guid_copy (guid), path);
+}
+
 namespace
 {
 /* Keeps the book open for editing for as long as it lives. */
@@ -543,7 +557,17 @@ content (const Transaction* trans, bool live)
     return out;
 }
 
-/* The slots GnuCash SE sets when it locks a transaction. */
+/* A slot that refers to another transaction, as text; empty if unset. */
+static std::string
+guid_slot_string (const Transaction* trans, const char* key)
+{
+    auto guid {get_guid (inst (trans), {SE, key})};
+    return guid ? guid_string (guid) : "";
+}
+
+/* The slots that must stay the same once a transaction is locked:
+ * those GnuCash SE sets when it locks, and what a correcting entry
+ * says about itself. */
 static std::string
 lock_slots (const Transaction* trans)
 {
@@ -556,6 +580,10 @@ lock_slots (const Transaction* trans)
     put (out, std::to_string (locked_at ? locked_at->t : 0));
     put (out, get_string (inst (trans), {SE, "hash"}));
     put (out, get_string (inst (trans), {SE, "former-num"}));
+    put (out, guid_slot_string (trans, "corrects"));
+    put (out, guid_slot_string (trans, "replaces"));
+    put (out, get_string (inst (trans), {SE, "signature"}));
+    put (out, get_string (inst (trans), {SE, "reason"}));
     return out;
 }
 
@@ -595,6 +623,20 @@ chain_next (const std::string& previous, const Transaction* trans)
     put (text, get_string (inst (trans), {SE, "period"}));
     put (text, std::to_string (get_int (inst (trans), {SE, "number"})));
     put (text, content (trans, true));
+    /* Added after the first format: hashed only when present, so that
+     * transactions without them keep their hash. */
+    if (auto corrects {guid_slot_string (trans, "corrects")}; !corrects.empty ())
+    {
+        put (text, "corrects");
+        put (text, corrects);
+        put (text, get_string (inst (trans), {SE, "signature"}));
+        put (text, get_string (inst (trans), {SE, "reason"}));
+    }
+    if (auto replaces {guid_slot_string (trans, "replaces")}; !replaces.empty ())
+    {
+        put (text, "replaces");
+        put (text, replaces);
+    }
     return sha256 (text);
 }
 
@@ -687,6 +729,190 @@ gnc_se_shutdown ()
 {
     gnc_trans_set_commit_guard (nullptr);
     last_rejection.clear ();
+}
+
+/* ------------------------------------------------------------------ */
+/* Corrections                                                        */
+
+static Transaction*
+linked_transaction (const Transaction* trans, const char* key)
+{
+    auto guid {get_guid (inst (trans), {SE, key})};
+    return guid ? xaccTransLookup (guid, xaccTransGetBook (trans)) : nullptr;
+}
+
+Transaction*
+gnc_se_trans_get_correction (const Transaction* original)
+{
+    g_return_val_if_fail (original, nullptr);
+    auto correction {linked_transaction (original, "corrected-by")};
+    /* The link back tells a correcting entry from whatever else might
+     * have got the GUID, and one that has been deleted is not found. */
+    if (correction && gnc_se_trans_get_corrected (correction) == original)
+        return correction;
+    return nullptr;
+}
+
+Transaction*
+gnc_se_trans_get_corrected (const Transaction* correction)
+{
+    g_return_val_if_fail (correction, nullptr);
+    return linked_transaction (correction, "corrects");
+}
+
+Transaction*
+gnc_se_trans_get_replaced (const Transaction* replacement)
+{
+    g_return_val_if_fail (replacement, nullptr);
+    return linked_transaction (replacement, "replaces");
+}
+
+std::string
+gnc_se_trans_get_signature (const Transaction* trans)
+{
+    g_return_val_if_fail (trans, "");
+    return get_string (inst (trans), {SE, "signature"});
+}
+
+std::string
+gnc_se_trans_get_reason (const Transaction* trans)
+{
+    g_return_val_if_fail (trans, "");
+    return get_string (inst (trans), {SE, "reason"});
+}
+
+static std::string
+trimmed (const std::string& text)
+{
+    auto copy {g_strdup (text.c_str ())};
+    std::string result {g_strstrip (copy)};
+    g_free (copy);
+    return result;
+}
+
+/* A preliminary copy of a posted transaction, dated @a date and linked
+ * to it through the slot @a link. With @a negate the copy takes the
+ * original back. */
+static Transaction*
+copy_for_correction (const Transaction* original, const GDate& date,
+                     time64 entered, bool negate, const char* link,
+                     const std::string& description)
+{
+    auto copy {xaccTransCloneNoKvp (original)};
+    g_return_val_if_fail (copy, nullptr);
+
+    xaccTransBeginEdit (copy);
+    for (auto node = xaccTransGetSplitList (copy); node; node = node->next)
+    {
+        auto split {GNC_SPLIT (node->data)};
+        if (negate)
+        {
+            xaccSplitSetAmount (split, gnc_numeric_neg (xaccSplitGetAmount (split)));
+            xaccSplitSetValue (split, gnc_numeric_neg (xaccSplitGetValue (split)));
+        }
+        xaccSplitSetReconcile (split, NREC);
+    }
+    xaccTransSetDatePostedGDate (copy, date);
+    xaccTransSetDateEnteredSecs (copy, entered);
+    xaccTransSetNum (copy, "");
+    xaccTransSetDescription (copy, description.c_str ());
+    set_string (inst (copy), {SE, "series"},
+                get_string (inst (original), {SE, "series"}));
+    set_guid (inst (copy), {SE, link}, xaccTransGetGUID (original));
+    xaccTransCommitEdit (copy);
+    return copy;
+}
+
+GncSeCorrection
+gnc_se_correct (Transaction* original, const GDate& date,
+                const std::string& signature, const std::string& reason,
+                bool with_replacement)
+{
+    auto fail = [] (const char* error)
+    {
+        return GncSeCorrection {false, error, nullptr, nullptr};
+    };
+    g_return_val_if_fail (original, fail ("No transaction."));
+
+    if (!gnc_se_trans_is_locked (original))
+        return fail (_("Only a posted transaction is corrected with a "
+                       "correcting entry. A preliminary transaction can be "
+                       "changed as it is."));
+    if (!g_date_valid (&date))
+        return fail (_("The date is not valid."));
+    if (gnc_se_date_is_locked (xaccTransGetBook (original), date))
+        return fail (_("A correcting entry is dated in an open period."));
+    auto who {trimmed (signature)};
+    if (who.empty ())
+        return fail (_("A correcting entry says who made it."));
+    if (gnc_se_trans_get_correction (original))
+        return fail (_("The transaction already has a correcting entry."));
+
+    std::string old_description {view (xaccTransGetDescription (original))};
+    /* Translators: a voucher number such as "A 12", then the
+     * description of the transaction that is corrected. */
+    auto text {g_strdup_printf (_("Correction of %s: %s"),
+                                gnc_se_trans_get_voucher (original).c_str (),
+                                old_description.c_str ())};
+    std::string description {text};
+    g_free (text);
+
+    auto now {gnc_time (nullptr)};
+    auto correction {copy_for_correction (original, date, now, true, "corrects",
+                                          description)};
+    if (!correction)
+        return fail (_("The correcting entry could not be created."));
+    xaccTransBeginEdit (correction);
+    set_string (inst (correction), {SE, "signature"}, who);
+    set_string (inst (correction), {SE, "reason"}, trimmed (reason));
+    xaccTransCommitEdit (correction);
+
+    /* The original points to its correcting entry. "reversed-by" is
+     * the inherited slot, which the register uses to jump to it. */
+    xaccTransBeginEdit (original);
+    set_guid (inst (original), {SE, "corrected-by"},
+              xaccTransGetGUID (correction));
+    set_guid (inst (original), {"reversed-by"}, xaccTransGetGUID (correction));
+    xaccTransCommitEdit (original);
+    if (gnc_se_trans_get_correction (original) != correction)
+    {
+        xaccTransDestroy (correction);
+        return fail (_("The correcting entry could not be created."));
+    }
+
+    Transaction* replacement {nullptr};
+    if (with_replacement)
+        /* Entered a second later, so that the correcting entry gets the
+         * lower number when the two are posted together. */
+        replacement = copy_for_correction (original, date, now + 1, false,
+                                           "replaces", old_description);
+    return {true, "", correction, replacement};
+}
+
+/* When a correcting entry has been posted, says so in the notes of the
+ * transaction it corrects, where the register and the reports show it. */
+static void
+note_correction (const Transaction* correction)
+{
+    auto original {gnc_se_trans_get_corrected (correction)};
+    if (!original)
+        return;
+
+    char date[MAX_DATE_LENGTH + 1] = "";
+    auto posted {xaccTransGetDatePostedGDate (correction)};
+    qof_print_gdate (date, sizeof date, &posted);
+    /* Translators: a voucher number such as "A 15", a date, and the
+     * signature of who made the correction. */
+    auto line {g_strdup_printf (_("Corrected by %s, dated %s, signed %s."),
+                                gnc_se_trans_get_voucher (correction).c_str (),
+                                date,
+                                gnc_se_trans_get_signature (correction).c_str ())};
+    std::string notes {view (xaccTransGetNotes (original))};
+    if (!notes.empty ())
+        notes += "\n";
+    notes += line;
+    g_free (line);
+    xaccTransSetNotes (original, notes.c_str ());
 }
 
 /* ------------------------------------------------------------------ */
@@ -818,6 +1044,7 @@ lock_transaction (Transaction* trans, const PeriodKey& key, PeriodState& state)
         return false; /* The guard refused, which it should not. */
     state.next = number + 1;
     state.head = hash;
+    note_correction (trans);
     return true;
 }
 
@@ -1076,6 +1303,14 @@ gnc_se_verify (QofBook* book)
             if (!in_locked_period)
                 issues.push_back (issue (GncSeIssueType::LOCKED_AFTER_LOCK_DATE,
                                          key, number, 0, trans));
+            if (get_guid (inst (trans), {SE, "corrects"}))
+            {
+                auto original {gnc_se_trans_get_corrected (trans)};
+                if (!original || !gnc_se_trans_is_locked (original))
+                    issues.push_back (
+                        issue (GncSeIssueType::CORRECTION_WITHOUT_ORIGINAL, key,
+                               number, 0, trans));
+            }
         }
         else if (in_locked_period && is_entry (trans))
             issues.push_back (issue (GncSeIssueType::UNLOCKED_BEFORE_LOCK_DATE,
