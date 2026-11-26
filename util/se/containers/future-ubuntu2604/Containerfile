@@ -1,0 +1,27 @@
+# Byggmiljö för GnuCash-grenen `future` (blivande 6.0).
+#
+# Speglar upstreams CI-jobb "Ubuntu-26.04 CI Tests" (.github/workflows/ci-tests.yml på `future`):
+# samma distribution och samma paketrad, plus det som GitHubs runner har förinstallerat
+# (kompilator, git, swig, pkg-config, python-headers).
+#
+# Bygg:  podman build -t localhost/gnucash-future:ubuntu26.04 util/se/containers/future-ubuntu2604
+# Kör:   util/se/future-env <kommando>
+
+FROM docker.io/library/ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# guile: README.dependencies på `future` kräver guile 3.0.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates pkg-config swig python3-dev tzdata \
+      gettext cmake libxslt1-dev xsltproc ninja-build libboost-all-dev libgtk-3-dev \
+      guile-3.0-dev libgwengui-gtk3-dev libaqbanking-dev libofx-dev libdbi-dev libdbd-sqlite3 \
+      libwebkit2gtk-4.1-dev googletest libicu-dev libsecret-1-dev libxml2-dev libxml2-utils \
+      language-pack-en language-pack-fr \
+ && rm -rf /var/lib/apt/lists/*
+
+# Samma tidszon som upstreams CI; vissa tester är tidszonsberoende.
+ENV TZ=America/Los_Angeles \
+    CTEST_OUTPUT_ON_FAILURE=On \
+    LANG=C.UTF-8

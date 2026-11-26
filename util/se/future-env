@@ -1,0 +1,50 @@
+#!/bin/sh
+# Kör ett kommando i byggcontainern för GnuCash SE på grenen `future` (blivande 6.0).
+#
+#   util/se/future-env cmake --version
+#   util/se/future-env ninja -j4
+#   util/se/future-env            (utan argument: interaktivt skal)
+#
+# Källträdet är det här repot. Det monteras på samma absoluta sökväg som på värden, så att
+# sökvägar i byggkatalogen och eventuella git-worktrees stämmer. Arbetskatalogen är
+# byggkatalogen .build/future. Root i containern motsvarar den egna användaren på värden
+# (rotlös podman), så byggfilerna ägs av den.
+#
+# Image byggs en gång med:
+#   podman build -t localhost/gnucash-future:ubuntu26.04 util/se/containers/future-ubuntu2604
+#
+# Miljövariabler:
+#   GNUCASH_SRC   källträd (standard: repots rot, två nivåer upp från det här skriptet)
+#   FUTURE_IMAGE  image (standard: localhost/gnucash-future:ubuntu26.04)
+#   FUTURE_NET    sätt till 1 för nätverk i containern (standard: inget nätverk)
+#   FUTURE_CPUS   antal processorer containern får använda (standard: 4)
+#   TZ            tidszon i containern (standard: imagens, America/Los_Angeles som upstreams CI)
+set -eu
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+src=${GNUCASH_SRC:-$(CDPATH= cd -- "$here/../.." && pwd)}
+image=${FUTURE_IMAGE:-localhost/gnucash-future:ubuntu26.04}
+build="$src/.build/future"
+
+[ -f "$src/CMakeLists.txt" ] && [ -e "$src/.git" ] ||
+    { echo "future-env: hittar inget GnuCash-källträd i $src" >&2; exit 1; }
+mkdir -p "$build"
+
+net="--network=none"
+[ "${FUTURE_NET:-0}" = 1 ] && net=""
+
+tty=""
+[ -t 0 ] && [ -t 1 ] && tty="-it"
+
+[ $# -gt 0 ] || set -- bash
+
+# shellcheck disable=SC2086
+exec nice -n 19 podman run --rm $tty $net \
+    --cpus "${FUTURE_CPUS:-4}" \
+    -v "$src:$src" \
+    -w "$build" \
+    -e GIT_CONFIG_COUNT=1 \
+    -e GIT_CONFIG_KEY_0=safe.directory \
+    -e GIT_CONFIG_VALUE_0='*' \
+    ${TZ:+-e TZ="$TZ"} \
+    "$image" "$@"
