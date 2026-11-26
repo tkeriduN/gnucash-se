@@ -17,6 +17,11 @@
           <attribute name="tooltip" translatable="yes">Check that the voucher series are unbroken and that no posted transaction has been changed</attribute>
         </item>
         <item>
+          <attribute name="label" translatable="yes">Processing _History…</attribute>
+          <attribute name="action">gnc-plugin-se-actions.SeHistoryAction</attribute>
+          <attribute name="tooltip" translatable="yes">Show what has been done to the book: periods posted, corrections, changed settings, accounts and tax tables</attribute>
+        </item>
+        <item>
           <attribute name="label" translatable="yes">Voucher _Series and Fiscal Year…</attribute>
           <attribute name="action">gnc-plugin-se-actions.SeSettingsAction</attribute>
           <attribute name="tooltip" translatable="yes">Set the start of the fiscal year, the voucher series and how long posting may be put off</attribute>
