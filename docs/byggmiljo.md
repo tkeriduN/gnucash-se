@@ -61,10 +61,34 @@ bygget. Uppmätt 2026-11-26 på utvecklingsservern:
 | `ninja -j4` | 1121 steg, ok | 5 min 23 s |
 | `ninja -j4 check` (tidszon America/Los_Angeles, som upstreams CI) | **140 av 140 gröna** | 3 min 22 s, varav testerna 7,4 s |
 
+Med forkens kod tillkommer `test-gnc-se`: 141 av 141.
+
 - I testerna: 398 gtest-testfall, 1 298 Scheme-kontroller (`[pass]`) och 313 GLib-testfall (`ok`).
 - Kompilatorvarningar: tre "non-literal format string" från Guile-kompileringen och en länkvarning om
   `mktemp` (`gnc-xml-backend.cpp`). Inga fel; C/C++ byggs med `-Werror`.
 - Samma resultat som följeslagarrepots baslinje på `5c17baf487` (1121 steg, 140/140).
+
+## Provköra gränssnittet utan skärm
+
+Utvecklingsservern har ingen skärm. Imagen `localhost/gnucash-future-gui:ubuntu26.04`
+(`util/se/containers/future-gui/Containerfile`) lägger en virtuell skärm (Xvfb), fönsterhanteraren openbox,
+`xdotool` och svenska språkfiler ovanpå byggimagen.
+
+```sh
+podman build -t localhost/gnucash-future-gui:ubuntu26.04 util/se/containers/future-gui   # en gång
+cd .build/future && ../../util/se/future-env ninja -j4 install && cd ../..               # till .build/inst-future
+FUTURE_IMAGE=localhost/gnucash-future-gui:ubuntu26.04 \
+    util/se/future-env "$PWD/util/se/gui-test/drive.sh" "$PWD/util/se/gui-test/steps-lock.sh"
+```
+
+`drive.sh` skapar en liten testbok med Python-bindningarna (`make-book.py`), startar GnuCash SE och kör stegen i
+stegfilen: tangenttryckningar och skärmbilder, som hamnar i `.build/gui-test/` tillsammans med den sparade boken
+`work.gnucash`. Sätt `GUI_LANGUAGE=sv` för svenska menyer (då stämmer inte stegfilens kortkommandon, som utgår
+från engelska menyer). `xvfb-run` hänger sig i containern, så skriptet startar Xvfb själv.
+
+Provkört 2026-11-26: menyn Åtgärder → Bokföring, "Bokför till och med" (3 transaktioner, A 1 till A 3), kontrollen,
+inställningsdialogen, den sparade bokens innehåll, varningen när en bok som ändrats utanför SE öppnas,
+datumspärren i registret och de svenska menytexterna.
 
 ### Att känna till
 
