@@ -169,6 +169,10 @@ issue_text (const QofBook* book, const GncSeIssue& issue)
         return format (_("A preliminary transaction is dated in the locked "
                          "period: %s. Move it to an open period or delete it."),
                        trans.c_str ());
+    case GncSeIssueType::CORRECTION_WITHOUT_ORIGINAL:
+        return format (_("%s (%s) is a correcting entry, but the transaction "
+                         "it corrects is missing or not posted."),
+                       voucher.c_str (), trans.c_str ());
     }
     return "";
 }
@@ -419,6 +423,165 @@ lock_dialog_run (GtkWindow* parent, QofBook* book)
         text += _("Save the book to keep the posting.");
     }
     gnc_info_dialog (parent, "%s", text.c_str ());
+}
+
+/* ------------------------------------------------------------------ */
+/* Correcting a posted transaction                                    */
+
+struct CorrectDialog
+{
+    QofBook* book;
+    GtkWidget* dialog;
+    GtkWidget* date_edit;
+    GtkWidget* signature;
+    GtkWidget* reason;
+    GtkWidget* replacement;
+    GtkWidget* message;
+};
+
+static GDate
+correct_dialog_date (CorrectDialog* data)
+{
+    GDate date;
+    g_date_clear (&date, 1);
+    gnc_date_edit_get_gdate (GNC_DATE_EDIT (data->date_edit), &date);
+    return date;
+}
+
+static bool
+is_blank (const char* text)
+{
+    while (text && g_ascii_isspace (*text))
+        ++text;
+    return !text || !*text;
+}
+
+/* Says what is missing and lets the correction be made when nothing is. */
+static void
+correct_dialog_update (CorrectDialog* data)
+{
+    const char* message = "";
+    if (gnc_se_date_is_locked (data->book, correct_dialog_date (data)))
+        message = _("The date is in a locked period. A correcting entry is "
+                    "dated in an open period.");
+    else if (is_blank (gtk_entry_get_text (GTK_ENTRY (data->signature))))
+        message = _("Enter your signature: a correction says who made it.");
+    gtk_label_set_text (GTK_LABEL (data->message), message);
+    gtk_dialog_set_response_sensitive (GTK_DIALOG (data->dialog),
+                                       GTK_RESPONSE_OK, !*message);
+}
+
+static void
+correct_dialog_changed_cb (GtkWidget* widget, gpointer user_data)
+{
+    correct_dialog_update (static_cast<CorrectDialog*> (user_data));
+}
+
+static GtkWidget* grid_label (const char* text);
+
+Transaction*
+gnc_plugin_se_correct_transaction (GtkWindow* parent, Transaction* trans)
+{
+    g_return_val_if_fail (trans, nullptr);
+    g_return_val_if_fail (gnc_se_trans_is_locked (trans), nullptr);
+    auto book {xaccTransGetBook (trans)};
+    auto voucher {gnc_se_trans_get_voucher (trans)};
+    auto what {transaction_text (book, *xaccTransGetGUID (trans))};
+
+    if (auto existing {gnc_se_trans_get_correction (trans)})
+    {
+        auto status {gnc_se_trans_is_locked (existing)
+                     ? format (_("%s already has a correcting entry, %s."),
+                               voucher.c_str (),
+                               gnc_se_trans_get_voucher (existing).c_str ())
+                     : format (_("%s already has a correcting entry, which is "
+                                 "not posted yet."), voucher.c_str ())};
+        return gnc_verify_dialog (parent, TRUE, "%s\n\n%s", status.c_str (),
+                                  _("Jump to the transaction?"))
+            ? existing : nullptr;
+    }
+
+    CorrectDialog data {book, nullptr, nullptr, nullptr, nullptr, nullptr,
+                        nullptr};
+    data.dialog = gtk_dialog_new_with_buttons (
+        _("Correct a Posted Transaction"), parent,
+        static_cast<GtkDialogFlags> (GTK_DIALOG_MODAL |
+                                     GTK_DIALOG_DESTROY_WITH_PARENT),
+        _("_Cancel"), GTK_RESPONSE_CANCEL,
+        _("Create Correcting _Entry"), GTK_RESPONSE_OK,
+        nullptr);
+
+    auto grid {gtk_grid_new ()};
+    gtk_grid_set_row_spacing (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+    gtk_container_set_border_width (GTK_CONTAINER (grid), 12);
+    gtk_box_pack_start (
+        GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (data.dialog))), grid,
+        TRUE, TRUE, 0);
+    int row = 0;
+
+    auto intro {format (_("%s (%s) is posted and cannot be changed. A "
+                          "correcting entry takes it back with a voucher of "
+                          "its own, and the two refer to each other."),
+                        voucher.c_str (), what.c_str ())};
+    gtk_grid_attach (GTK_GRID (grid), wrapped_label (intro.c_str ()), 0, row++,
+                     2, 1);
+
+    data.date_edit = gnc_date_edit_new (gnc_time (nullptr), FALSE, FALSE);
+    gtk_grid_attach (GTK_GRID (grid),
+                     grid_label (_("Date of the correcting entry:")), 0, row,
+                     1, 1);
+    gtk_grid_attach (GTK_GRID (grid), data.date_edit, 1, row++, 1, 1);
+
+    data.signature = gtk_entry_new ();
+    gtk_entry_set_activates_default (GTK_ENTRY (data.signature), TRUE);
+    gtk_grid_attach (GTK_GRID (grid), grid_label (_("Your signature:")), 0, row,
+                     1, 1);
+    gtk_grid_attach (GTK_GRID (grid), data.signature, 1, row++, 1, 1);
+
+    data.reason = gtk_entry_new ();
+    gtk_widget_set_hexpand (data.reason, TRUE);
+    gtk_entry_set_activates_default (GTK_ENTRY (data.reason), TRUE);
+    gtk_grid_attach (GTK_GRID (grid), grid_label (_("Reason:")), 0, row, 1, 1);
+    gtk_grid_attach (GTK_GRID (grid), data.reason, 1, row++, 1, 1);
+
+    data.replacement = gtk_check_button_new_with_mnemonic (
+        _("Also create a _copy of the original to put right"));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (data.replacement), TRUE);
+    gtk_grid_attach (GTK_GRID (grid), data.replacement, 0, row++, 2, 1);
+
+    data.message = wrapped_label ("");
+    gtk_grid_attach (GTK_GRID (grid), data.message, 0, row++, 2, 1);
+
+    g_signal_connect (data.date_edit, "date_changed",
+                      G_CALLBACK (correct_dialog_changed_cb), &data);
+    g_signal_connect (data.signature, "changed",
+                      G_CALLBACK (correct_dialog_changed_cb), &data);
+    gtk_dialog_set_default_response (GTK_DIALOG (data.dialog), GTK_RESPONSE_OK);
+    correct_dialog_update (&data);
+    gtk_widget_show_all (grid);
+    gtk_widget_grab_focus (data.signature);
+
+    auto response {gtk_dialog_run (GTK_DIALOG (data.dialog))};
+    auto date {correct_dialog_date (&data)};
+    std::string signature {gtk_entry_get_text (GTK_ENTRY (data.signature))};
+    std::string reason {gtk_entry_get_text (GTK_ENTRY (data.reason))};
+    auto with_replacement {gtk_toggle_button_get_active (
+            GTK_TOGGLE_BUTTON (data.replacement))};
+    gtk_widget_destroy (data.dialog);
+    if (response != GTK_RESPONSE_OK)
+        return nullptr;
+
+    gnc_suspend_gui_refresh ();
+    auto result {gnc_se_correct (trans, date, signature, reason,
+                                 with_replacement)};
+    gnc_resume_gui_refresh ();
+    if (!result.ok)
+    {
+        gnc_error_dialog (parent, "%s", result.error.c_str ());
+        return nullptr;
+    }
+    return result.correction;
 }
 
 /* ------------------------------------------------------------------ */

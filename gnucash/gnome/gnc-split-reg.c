@@ -58,6 +58,8 @@
 #include "gnc-state.h"
 
 #include "dialog-utils.h"
+#include "gnc-se.h" /* GnuCash SE */
+#include "gnc-plugin-se.h" /* GnuCash SE */
 
 // static QofLogModule log_module = GNC_MOD_SX;
 static QofLogModule log_module = GNC_MOD_GUI;
@@ -1085,6 +1087,17 @@ gsr_default_reverse_txn_handler (GNCSplitReg *gsr, gpointer data)
     trans = gnc_split_register_get_current_trans (reg);
     if (trans == NULL)
         return;
+
+    /* GnuCash SE: a posted transaction is corrected with a correcting
+     * entry, which says who made it and why. */
+    if (gnc_se_trans_is_locked (trans))
+    {
+        new_trans = gnc_plugin_se_correct_transaction (GTK_WINDOW (gsr->window),
+                                                       trans);
+        if (new_trans)
+            gnc_split_reg_jump_to_split (gsr, xaccTransGetSplit (new_trans, 0));
+        return;
+    }
 
     if (xaccTransGetReversedBy(trans))
     {

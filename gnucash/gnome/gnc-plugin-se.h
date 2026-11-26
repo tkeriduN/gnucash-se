@@ -22,6 +22,7 @@
 
 #include <gtk/gtk.h>
 #include "gnc-plugin.h"
+#include "Transaction.h"
 
 G_BEGIN_DECLS
 
@@ -34,6 +35,13 @@ G_DECLARE_FINAL_TYPE (GncPluginSe, gnc_plugin_se, GNC, PLUGIN_SE, GncPlugin)
  *  voucher series, and the settings for both. It also checks a book
  *  when it has been opened. */
 GncPlugin *gnc_plugin_se_new (void);
+
+/** Create a correcting entry for a posted transaction: asks for its
+ *  date, who makes the correction and why. If the transaction already
+ *  has a correcting entry the user is offered to go to it instead.
+ *  @return The correcting entry, or NULL if there is none to show. */
+Transaction *gnc_plugin_se_correct_transaction (GtkWindow *parent,
+                                                Transaction *trans);
 
 G_END_DECLS
 
