@@ -181,7 +181,7 @@ På boken:
 | Nyckel | Typ | Innehåll |
 |---|---|---|
 | `se/lock-date` | datum | låsdatum D |
-| `se/fiscal-year-start` | text | räkenskapsårets första dag som `MM-DD`, standard `01-01` (brutet räkenskapsår går att ange; förlängt och förkortat år kommer med design 04) |
+| `se/fiscal-year-start` | text | räkenskapsårets första dag som `MM-DD`, standard `01-01`. Sedan design 04 är det bara mönstret för år som boken ännu inte har; se [`04-rakenskapsar.md`](04-rakenskapsar.md) |
 | `se/series/<kod>/description` | text | t.ex. "Verifikationer" (standardserien `A`) |
 | `se/series/<kod>/period` | text | `fiscal-year` (standard) eller `continuous` |
 | `se/series/<kod>/periods/<period>/next` | heltal | nästa nummer i perioden. `<period>` är året då räkenskapsåret börjar (t.ex. `2025`), eller `all` för en löpande serie |
