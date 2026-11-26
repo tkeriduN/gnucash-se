@@ -80,6 +80,7 @@ Källor:
 ### A4. Tidpunkt för bokföring, kontantmetod och faktureringsmetod
 - **5 kap. 2 § BFL:**
   - Kontanta in- och utbetalningar ska bokföras senast påföljande arbetsdag.
+    *Tillägg i forken 2026-11-26 [V]:* "kontanta" omfattar sedlar och mynt, postväxlar, mottagna checkar och andra betalningsanvisningar som omedelbart kan omsättas i pengar, inte bank- eller plusgiro, kontokort eller företagets egna checkar (BFNAR 1.9 med kommentar, VL 13:2 s. 12). Se även `design/01-las-och-numrering.md`, avsnitt 3.1.
   - Andra affärshändelser ska bokföras "så snart det kan ske".
   - Företag med nettoomsättning normalt högst 3 mkr får vänta tills betalning sker (kontantmetoden). Vid årets slut ska alla obetalda fordringar och skulder bokföras.
 - **BFNAR punkterna 3.1–3.3:** definitioner av "påföljande arbetsdag" och "så snart det kan ske".

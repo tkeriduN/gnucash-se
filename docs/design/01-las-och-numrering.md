@@ -1,6 +1,6 @@
 # Design 01 – fast lås och obruten verifikationsnumrering
 
-Status: **skiss för Isaks granskning**, 2026-11-26. Ingen kod är skriven. Kodhänvisningar gäller
+Status: **skiss, granskad av Isak 2026-11-26** (besluten står i avsnitt 9). Ingen kod är skriven. Kodhänvisningar gäller
 `upstream/future` `515c96a83d` (2026-11-25).
 
 ## 1. Vad lagen kräver och vad funktionen ska göra
@@ -8,10 +8,10 @@ Status: **skiss för Isaks granskning**, 2026-11-26. Ingen kod är skriven. Kodh
 | Krav | Källa (se `../svenska-krav.md`, avsnitt A) | Funktion i SE |
 |---|---|---|
 | Det bokförda ska vara varaktigt. I ett program där poster kan ändras eller raderas är ingenting bokfört förrän en aktiv åtgärd låser dem | BFNAR 2.1 med kommentar | **Låsning** ("Bokför") som en uttrycklig åtgärd. Efter den kan posten inte ändras eller raderas i SE |
-| Låsning senast vid tidsgränserna i 5 kap. 2 § BFL och BFNAR kap. 3 (kontant: påföljande arbetsdag; övrigt: så snart det kan ske, med tillåten senareläggning till t.ex. 50 dagar efter månadens utgång, punkt 3.6) | BFNAR 2.1, 3 kap. | SE påminner när preliminära poster är äldre än gränsen. Ingen automatisk låsning i första versionen |
+| Låsning senast vid tidsgränserna i 5 kap. 2 § BFL och BFNAR kap. 3 (se 3.1) | BFNAR 2.1, 3 kap. | Periodlåsning. SE påminner när preliminära poster är äldre än gränsen. Ingen automatisk låsning i första versionen |
 | Varje verifikation har verifikationsnummer eller annat identifieringstecken | 5 kap. 7 § BFL, BFNAR 2.3 | Varje låst transaktion får serie + löpnummer |
 | Serien ska vara obruten för en tidsperiod och det ska gå att kontrollera i systemet | BFNAR 5.9 | Nummer tilldelas vid låsning; kontrollfunktion som visar luckor och avvikelser |
-| Flera serier tillåtna om bokföringen förblir överskådlig; en serie kan börja om varje räkenskapsår eller löpa över flera år | BFNAR 5.10 | Serier konfigureras per bok; omstart per år eller löpande |
+| Flera serier tillåtna om bokföringen förblir överskådlig; en serie kan börja om varje räkenskapsår eller löpa över flera år | BFNAR 5.10 | Standard: en serie som börjar om varje räkenskapsår. Fler serier och löpande serier kan läggas till |
 | Registreringsordningen ska framgå per serie | BFNAR 2.2 | Numren följer registreringsordningen inom serien |
 | Rättelse av bokförd post bara genom rättelsepost med egen verifikation | BFNAR 2.17–2.18 | Redigering av låst post nekas; användaren hänvisas till rättelse (design 02) |
 | Behandlingshistorik med registreringsdatum; systemändringar loggas | BFNAR 9.16 | Låsning och ändrade serieinställningar blir historikhändelser (design 03). Den här designen definierar bara gränssnittet |
@@ -25,7 +25,7 @@ Utanför den här designen: rättelseverifikationen själv (02), behandlingshist
   Har inget verifikationsnummer.
 - **Bokförd (låst) transaktion**: låst av SE. Bär serie, nummer, låstidpunkt och kontrollsumma.
 - **Låsdatum** per bok: alla transaktioner med bokföringsdatum (`date_posted`) till och med låsdatumet är låsta.
-  Låsdatumet kan bara flyttas framåt. Skiljer sig från upstreams rullande tröskel (`autoreadonly-days`), som
+  Låsdatumet kan bara flyttas framåt. Skiljer sig från den ärvda rullande tröskeln (`autoreadonly-days`), som
   kan ändras fritt och bara gäller i gränssnittet.
 - **Verifikationsserie**: kod (t.ex. `A`), beskrivning, period (löpande eller per räkenskapsår), nästa nummer.
   Varje transaktion hör till en serie; standardserie per bok, och på sikt per kontotyp eller importkälla
@@ -33,11 +33,38 @@ Utanför den här designen: rättelseverifikationen själv (02), behandlingshist
 - **Registreringsordning**: `date_entered` (registreringstidpunkt, finns redan i GnuCash), med transaktionens
   GUID som avgörande vid lika tidpunkt.
 
-## 3. Numrering vid låsning, inte vid registrering
+## 3. Låsning per period, numrering vid låsning
+
+### 3.1 Periodlåsning räcker enligt reglerna
+
+Kontrollerat 2026-11-26 i BFN:s vägledning Bokföring, VL 13:2 (uppdaterad 2024-09-16):
+
+- **Preliminär bokföring är tillåten.** Kommentaren till punkt 2.1 (s. 15): "Så länge bokföringen inte är låst,
+  kan affärshändelserna inte anses bokförda. Bokföringen måste låsas så att den blir varaktig senast vid den
+  tidpunkt då affärshändelserna ska vara bokförda enligt bestämmelserna i kapitel 3." Inget krav på att varje
+  post låses när den registreras. Låsningen får göras samlat, så länge den sker i tid.
+- **Tidsgränserna** (kapitel 3):
+  - *Kontanta in- och utbetalningar*: senast påföljande arbetsdag (5 kap. 2 § BFL, punkterna 3.1–3.2, s. 33).
+    "Kontanta" betyder sedlar och mynt, postväxlar, mottagna checkar och liknande (punkt 1.9, s. 12), inte
+    bank- eller plusgiro, kontokort eller företagets egna checkar. För kontanta betalningar får bara
+    presentationen i systematisk ordning senareläggas. Registreringsordningen ska vara bokförd senast
+    påföljande arbetsdag (punkt 3.6 andra stycket med kommentar, s. 35), utom vid certifierat kassaregister
+    (punkt 3.10).
+  - *Övriga affärshändelser*: så snart det kan ske (3.3). Fakturor får vänta tills fakturan har utfärdats
+    eller tagits emot (3.4). Bokföringen får senareläggas till 50 dagar efter månadens utgång (3.6), eller
+    kvartalets vid nettoomsättning högst 3 mkr (3.7), om verifikationerna under tiden ordnas i takt med att de
+    kommer in (3.5).
+- **Verifikationsnumret** "ska anges på ett varaktigt sätt" (kommentaren till 5.9–5.10, s. 52, med hänvisning
+  till 5.4). Jag har inte hittat något i vägledningen som kräver att numret sätts redan vid registreringen.
+
+**Slutsats:** periodlåsning uppfyller kraven. Ett företag med kontanta betalningar måste låsa senast
+påföljande arbetsdag, i praktiken "Bokför till och med i går" varje arbetsdag. SE påminner om det (7).
+"Bokför direkt", alltså låsning när en transaktion sparas, behövs inte och byggs inte.
+
+### 3.2 Numrering vid låsning
 
 Program som numrerar när en verifikation sparas måste förbjuda radering av preliminära poster, annars blir det
-luckor. Det går inte ihop med att GnuCash fritt låter användaren radera och ändra, och det går inte att
-garantera när boken också öppnas i vanlig GnuCash.
+luckor. Det går inte ihop med att GnuCash fritt låter användaren radera och ändra preliminära poster.
 
 SE gör därför så här: vid låsning till datum D tas alla preliminära transaktioner med `date_posted` ≤ D, de
 grupperas per serie och sorteras i registreringsordning, och nästa nummer i serien tilldelas i den ordningen.
@@ -48,24 +75,25 @@ Konsekvenser:
   preliminära poster är inte bokförda.
 - Efter låsning till D nekar SE nya transaktioner med `date_posted` ≤ D. Det som upptäcks senare bokförs i
   öppen period (BFNAR 2.18 kommentar), eller som rättelse.
-- Den som vill numrera direkt kan låsa varje transaktion när den sparas ("Bokför direkt"). Det är samma
-  mekanism med D = transaktionens datum, men kräver att transaktionerna registreras i datumordning. Se öppen
-  fråga 3.
+- Pappersunderlag får sitt verifikationsnummer efter låsningen. Fram till dess ordnas de i den ordning de
+  kommer in (punkt 3.5).
+- Har transaktionen redan en text i `num` när den låses (t.ex. i en bok som funnits före SE) sparas den undan
+  i `se/former-num` innan verifikationsnumret skrivs dit.
 
 ## 4. Befintliga mekanismer i `future`
 
 | Mekanism | Var | Vad den gör | Användning i SE |
 |---|---|---|---|
-| `xaccTransSetReadOnly` / `xaccTransGetReadOnly` / `xaccTransClearReadOnly`, KVP `trans-read-only` (en text med orsaken) | `libgnucash/engine/Transaction.cpp` | `xaccTransDestroy` vägrar radera; `xaccSplitDestroy` vägrar ta bort splits; `xaccTransVoid` vägrar; registret (`split-register-model.c`, `gnc-split-reg.c`) visar orsaken och vägrar redigera | **Sätts även av SE** vid låsning, så att vanlig GnuCash skyddar posten i gränssnittet (se 6.2) |
+| `xaccTransSetReadOnly` / `xaccTransGetReadOnly` / `xaccTransClearReadOnly`, KVP `trans-read-only` (en text med orsaken) | `libgnucash/engine/Transaction.cpp` | `xaccTransDestroy` vägrar radera; `xaccSplitDestroy` vägrar ta bort splits; `xaccTransVoid` vägrar; registret (`split-register-model.c`, `gnc-split-reg.c`) visar orsaken och vägrar redigera | **Sätts även av SE** vid låsning. Då hanterar den ärvda koden (registret, radering, makulering) låsta poster utan ny gränssnittskod, och en bok som öppnas i vanlig GnuCash för granskning skyddas mot oavsiktliga ändringar |
 | `xaccTransIsReadonlyByPostedDate`, `qof_book_get_num_days_autoreadonly` | `Transaction.cpp`, `qofbook.cpp` | Rullande tröskel "i dag minus N dagar", bara i gränssnittet | Används inte. SE har ett eget fast låsdatum |
-| Bokräknare `qof_book_get_counter`, `qof_book_increment_and_format_counter`, KVP `counters/<namn>` och `counter_formats/<namn>` | `libgnucash/engine/qofbook.cpp` | Generiska räknare med format, används för fakturanummer m.m. | Används **inte** för serierna: de kan ändras i bokinställningarna i vanlig GnuCash. SE håller nästa nummer i egna nycklar och kontrollerar mot de låsta transaktionerna |
+| Bokräknare `qof_book_get_counter`, `qof_book_increment_and_format_counter`, KVP `counters/<namn>` och `counter_formats/<namn>` | `libgnucash/engine/qofbook.cpp` | Generiska räknare med format, används för fakturanummer m.m. | Används **inte** för serierna: de kan ändras fritt i bokens egenskaper (avsnittet Counters). SE håller nästa nummer i egna nycklar och kontrollerar mot de låsta transaktionerna |
 | `num`-fältet / split-action (`qof_book_use_split_action_for_num_field`) | `Transaction.cpp`, `qofbook.cpp` | Fritt nummerfält | SE skriver det formaterade verifikationsnumret (`A 12`) i transaktionens `num` vid låsning, för visning, utskrift och SIE. Sanningen ligger i SE:s egna nycklar |
 | `date_entered`, `xaccTransGetDateEntered` | `Transaction.cpp` | Registreringstidpunkt | Registreringsordning (kan sättas av import med `xaccTransSetDateEnteredSecs`; acceptabelt) |
 | `xaccTransReverse`, KVP `reversed-by` | `Transaction.cpp` | Klonar och negerar; sätter `reversed-by` på originalet, ingen länk tillbaka | Underlag för rättelse (design 02). Observera att funktionen redigerar originalet, så låsspärren måste tillåta just den nyckeln |
 | Transaktionsloggen `xaccTransWriteLog` (`*.log`) | `libgnucash/engine/TransLog.cpp` | Logg för återställning efter krasch, inte en del av boken | Inte behandlingshistorik. Design 03 |
-| `gnc-features` | `libgnucash/engine/gnc-features.cpp` | Får vanlig GnuCash att vägra öppna boken | Används **inte** (beslut: nedåtkompatibelt) |
+| `gnc-features` | `libgnucash/engine/gnc-features.cpp`, kontrollen i `gnucash/gnome-utils/gnc-file.c` | En okänd funktion i boken får vanlig GnuCash att visa ett fel och inte öppna boken alls, inte ens för granskning | Används **inte**: granskning i vanlig GnuCash ska fungera (beslut 2026-11-26) |
 
-### Fallgropar i upstream
+### Fallgropar i den ärvda koden
 
 - **`ScrubBusiness.c`** (`gncScrubBusinessSplit`): en skrivskyddad, icke makulerad transaktion av typ
   `TXN_TYPE_NONE` som ligger i en lot (kundfordringar och leverantörsskulder) tolkas som en dubbelbokförd
@@ -73,7 +101,7 @@ Konsekvenser:
   loten. Vanlig GnuCash kan alltså lyfta skyddet från en manuell, låst transaktion mot 1510 eller 2440 vid
   "Kontrollera och reparera" (kontoträdet, `gncScrubBusinessAccount`, och registret för en enskild
   transaktion i ett reskontrakonto). SE måste stänga av den grenen för SE-låsta transaktioner (en krok), och
-  upptäckten (6.3) måste fånga det när det händer i vanlig GnuCash.
+  kontrollen (6.3) fångar det om det ändå händer, t.ex. när boken har öppnats i vanlig GnuCash.
 - **Fakturor**: när en faktura bokförs sätts skrivskydd med orsaken "Generated from an invoice…", och
   "Avbokför" rensar det (`gncInvoice.c`). SE får inte skriva över orsaken på sådana transaktioner, och måste
   neka avbokföring av en faktura vars transaktion är låst.
@@ -84,11 +112,11 @@ Konsekvenser:
 
 ## 5. Var spärren sitter
 
-| Alternativ | Skydd | Avvikelse mot upstream |
+| Alternativ | Skydd | Ändring i ärvd kod |
 |---|---|---|
 | A. Bara gränssnitt (som `autoreadonly`) | Svagt: Python-bindningar, import, scrub och skript går förbi | Litet, men spritt över många GUI-filer |
 | B. Spärr i motorn | Starkt i SE, oavsett vem som anropar | En krok i `xaccTransCommitEdit`, en i `xaccTransDestroy`/`xaccSplitDestroy`, en i `ScrubBusiness.c` |
-| C. Som B, plus upstreams `trans-read-only` | Som B, och dessutom gränssnittsskydd i vanlig GnuCash | Som B |
+| C. Som B, plus den ärvda nyckeln `trans-read-only` | Som B. Dessutom fungerar det ärvda skyddet i register, radering och makulering utan ny kod, och vid granskning i vanlig GnuCash | Som B |
 
 **Rekommendation: C.**
 
@@ -100,15 +128,15 @@ dokumentlänk, anteckningar, `reversed-by`. Det är den praxis som gäller i sve
 inte bokföringsposten.
 
 Kod: ett eget bibliotek `libgnucash/se/` (`gnc-se`), som länkar mot `gnc-engine`. Motorn får ett enda
-anropsställe: en vakt som är tom i vanlig GnuCash och registreras av `gnc-se` vid uppstart:
+anropsställe: en vakt som är tom tills `gnc-se` registrerar den vid uppstart:
 
 ```c
-/* Transaction.h, forkens enda krok i motorns gränssnitt */
+/* Transaction.h: forkens enda krok i motorns gränssnitt */
 typedef gboolean (*GncTransCommitGuard)(const Transaction *trans);
 void gnc_trans_set_commit_guard (GncTransCommitGuard guard);
 ```
 
-Med en vakt i stället för SE-logik i `Transaction.cpp` blir synkkonflikterna små, och låslogiken går att
+Med en vakt i stället för SE-logik i `Transaction.cpp` blir konflikterna vid synk mot upstream små, och låslogiken går att
 testa för sig. Allt annat ligger i `libgnucash/se/`: låsning, serier, kontroll, kontrollsummor, KVP-åtkomst
 via egna accessorer (6.0-linjen: KVP bara via accessorer).
 
@@ -121,8 +149,9 @@ På boken:
 | Nyckel | Typ | Innehåll |
 |---|---|---|
 | `se/lock-date` | datum | låsdatum D |
-| `se/series/<kod>/description` | text | t.ex. "Löpande verifikationer" |
-| `se/series/<kod>/period` | text | `continuous` eller `fiscal-year` |
+| `se/fiscal-year-start` | text | räkenskapsårets första dag som `MM-DD`, standard `01-01` (brutet räkenskapsår går att ange; förlängt och förkortat år kommer med design 04) |
+| `se/series/<kod>/description` | text | t.ex. "Verifikationer" (standardserien `A`) |
+| `se/series/<kod>/period` | text | `fiscal-year` (standard) eller `continuous` |
 | `se/series/<kod>/next` | heltal | nästa nummer (per år om `fiscal-year`: `se/series/<kod>/<år>/next`) |
 | `se/series/<kod>/head` | text | kontrollsumma för seriens senast låsta transaktion (6.3) |
 | `se/default-series` | text | standardserie |
@@ -136,20 +165,24 @@ På transaktionen:
 | `se/number` | heltal | löpnummer |
 | `se/locked-at` | tid | låstidpunkt |
 | `se/hash` | text | kontrollsumma (6.3) |
+| `se/former-num` | text | `num`-texten före låsningen, om det fanns någon |
 
-Plus upstreams `trans-read-only` med orsaken "Bokförd i GnuCash SE (A 12). Rätta med en rättelseverifikation."
+Plus den ärvda nyckeln `trans-read-only` med orsaken "Bokförd i GnuCash SE (A 12). Rätta med en rättelseverifikation."
 när transaktionen inte redan har en orsak från fakturadelen.
 
 KVP fungerar likadant i XML-backend och SQL-backend (tabellen `slots`). Vanlig GnuCash läser och skriver
 tillbaka okända slots orörda.
 
-### 6.2 Vad vanlig GnuCash gör med en SE-bok
+### 6.2 SE-böcker och vanlig GnuCash
 
-- Öppnar boken utan varning.
-- Registret vägrar redigera och radera låsta transaktioner (tack vare `trans-read-only`).
-- Går förbi skyddet via: "Kontrollera och reparera" (fallgropen i 4), Python-bindningar, logguppspelning,
-  redigering av XML-filen eller databasen, och ändring av nya transaktioner med datum före låsdatumet (vanlig
-  GnuCash känner inte till `se/lock-date`).
+En bok som har skapats eller öppnats i SE är en SE-bok. Den används i SE. Vanlig GnuCash ska kunna öppna den
+för att granska innehållet, men att arbeta i samma bok i både GnuCash och SE stöds inte (beslut 2026-11-26).
+
+- SE sätter därför ingen feature-flagga (då skulle vanlig GnuCash vägra öppna boken helt, se 4).
+- Registret i vanlig GnuCash vägrar ändra och radera låsta poster tack vare `trans-read-only`.
+- Det som ändå ändras utanför SE (t.ex. genom "Kontrollera och reparera", skript eller redigering av filen,
+  eller nya transaktioner före låsdatumet) hittas av kontrollen i 6.3 och räknas som fel. SE har inget
+  arbetsflöde för att ta in sådana ändringar.
 
 ### 6.3 Kontrollsummekedja och kontroll
 
@@ -161,15 +194,16 @@ seriens senaste i `se/series/<kod>/head`.
 Kontrollen körs när en bok öppnas i SE och på begäran ("Kontrollera verifikationsserier"). Den hittar:
 - luckor och dubbletter i numreringen (raderad eller ändrad post),
 - transaktioner vars skyddade fält har ändrats (hashen stämmer inte),
-- transaktioner med `date_posted` ≤ låsdatumet som saknar nummer (skapade i vanlig GnuCash),
+- transaktioner med `date_posted` ≤ låsdatumet som saknar nummer (skapade utanför SE),
 - låsta transaktioner som saknar `trans-read-only` (scrub-fallgropen).
 
-Vid avvikelse lagar SE ingenting tyst. Den visar vad som avviker, för in avvikelsen i behandlingshistoriken
-(03) när den finns, och låter användaren hantera det: rättelse, eller låsning av de nyupptäckta posterna i
+Vid avvikelse lagar SE ingenting tyst. Den visar vad som avviker och för in avvikelsen i
+behandlingshistoriken (03) när den finns. Användaren rättar: en ändrad låst post återställs eller rättas med
+rättelseverifikation, och en post som skapats utanför SE före låsdatumet tas bort och registreras på nytt i
 öppen period.
 
 **Gräns:** en öppen fil kan aldrig göras manipuleringssäker. Den som skriver om boken och räknar om kedjan
-kommer förbi kontrollen. Kedjan skyddar mot misstag och mot ändringar i vanlig GnuCash, inte mot avsiktligt
+kommer förbi kontrollen. Kedjan skyddar mot misstag och mot ändringar utanför SE, inte mot avsiktligt
 fusk. Ett yttre ankare, t.ex. seriens `head` i utskrift, SIE-export eller en signerad historikfil, kan
 läggas till senare. Det ska stå i systemdokumentationen (BFNAR 9.2) som SE genererar.
 
@@ -183,7 +217,9 @@ motornära kod finns andra vägar (en liten inbyggd implementation). Beslutas n�
   i en enda redigeringsomgång och sparas direkt.
 - **Registret**: kolumnen "Num" visar `A 12` eller "preliminär". Försök att redigera en låst post ger orsaken
   och en knapp till rättelse (02).
-- **Påminnelse** när det finns preliminära poster äldre än tidsgränsen (1).
+- **Påminnelse** när det finns preliminära poster äldre än tidsgränsen (3.1): för kontanta betalningar
+  påföljande arbetsdag, annars den senareläggning som boken är inställd på (t.ex. 50 dagar efter månadens
+  utgång).
 
 ## 8. Testplan
 
@@ -196,25 +232,17 @@ motornära kod finns andra vägar (en liten inbyggd implementation). Beslutas n�
   - kontrollsummekedjan: oförändrad bok ger ingen avvikelse; varje typ av avvikelse i 6.3 upptäcks;
   - kanonisk serialisering är stabil (gyllene värden).
 - Rundtur: lås, spara och läs om i både XML och SQLite; alla `se/`-nycklar och `trans-read-only` kvar.
-- Nedåtkompatibilitet: öppna en SE-bok med upstreams motor (samma bygge med vakten avregistrerad, och
-  `future` utan SE), gör ändringar via motorn och kör scrub. Läs sedan in boken i SE och kontrollera att
-  varje ändring upptäcks.
-- Hela upstreams testsvit ska vara lika grön som baslinjen (140/140 på `future`).
+- Granskning i vanlig GnuCash: öppna en SE-bok med motorn utan SE (samma bygge med vakten avregistrerad),
+  gör ändringar via motorn och kör scrub. Läs sedan in boken i SE och kontrollera att varje ändring upptäcks.
+- Hela den ärvda testsviten ska vara lika grön som baslinjen (140/140 på `future`).
 
-## 9. Öppna frågor till Isak
+## 9. Beslut (Isak 2026-11-26)
 
-1. **Serier som standard**: en serie (`A`) för allt, eller färdiga serier efter vanlig svensk praxis? Förslag:
-   en serie `A` som standard, fler kan läggas till.
-2. **Löpande eller per räkenskapsår**: förslag per räkenskapsår (vanligast i svenska program; SIE:s `#VER`
-   bär serie och nummer per räkenskapsårsfil). Då
-   behövs räkenskapsåret innan design 04 är klar: till att börja med kalenderår, eller ett räkenskapsår som
-   anges i bokinställningarna.
-3. **"Bokför direkt"** (låsning när en transaktion sparas) i första versionen, eller bara periodlåsning?
-   Förslag: bara periodlåsning först.
-4. **Befintliga böcker**: när en befintlig bok låses första gången numreras hela historiken till och med D.
-   Ska den gamla `num`-texten sparas undan (t.ex. i `se/former-num`), eller räcker det att den skrivs över?
-   Förslag: sparas undan.
-5. **Upstreams `trans-read-only`** (alternativ C): okej att SE sätter upstreams nyckel? Det är det enda som
-   ger skydd i vanlig GnuCash, men det är också en "ändrat beteende"-avvikelse.
-6. **Nya transaktioner före låsdatumet i vanlig GnuCash**: SE upptäcker dem (6.3). Ska de låsas in i en senare
-   serieposition med en historikanteckning, eller räknas som fel som användaren måste ta bort eller flytta?
+| Fråga | Beslut |
+|---|---|
+| Serier som standard | En serie, `A`, som börjar om varje räkenskapsår. Fler serier och löpande serier kan läggas till |
+| Räkenskapsår innan design 04 finns | Bokinställningen `se/fiscal-year-start`, standard 1 januari |
+| "Bokför direkt" | Byggs inte. Periodlåsning uppfyller kraven (3.1) |
+| Gammal `num`-text vid första låsningen | Sparas i `se/former-num` |
+| Den ärvda nyckeln `trans-read-only` | Används (alternativ C). Det är ett fält i bokfilen som koden SE har ärvt redan respekterar, inte någon koppling till upstreamprojektet |
+| Ändringar och nya poster gjorda utanför SE | Stöds inte. Vanlig GnuCash är bara till för granskning. Kontrollen (6.3) rapporterar dem som fel |

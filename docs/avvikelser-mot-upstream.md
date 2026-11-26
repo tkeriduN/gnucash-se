@@ -13,10 +13,12 @@ beteende.
 3. **Egna KVP-nycklar under ett eget prefix** (förslag: `se/`, se designskissen för lås och numrering), så
    att de aldrig krockar med upstreams nycklar och så att vanlig GnuCash bara ser okända slots den lämnar
    orörda. Upstreams befintliga nycklar återanvänds bara när det är uttryckligen beslutat och antecknat här.
-4. **Ingen feature-flagga i boken** (`gnc-features`) som stänger ute vanlig GnuCash (beslut 2026-11-26).
-5. **Ändringar som upstream kan vilja ha** skickas dit från klonen av `Gnucash/gnucash` och tas in i forken
-   via synken, inte tvärtom.
-6. **Upstreams stil** i allt som rör upstreamfiler: commitrubriker `[Modul] Kort rubrik`, upstreams kodstil.
+4. **Ingen feature-flagga i boken** (`gnc-features`): den skulle få vanlig GnuCash att vägra öppna boken även
+   för granskning (beslut 2026-11-26).
+5. **Envägs**: ändringar från upstream tas in via synken. Forken skickar inget tillbaka och har ingen kontakt
+   med upstreamprojektet.
+6. **Upstreams stil** i upstreamfiler (kodstil, commitrubriker `[Modul] Kort rubrik`), så att synkningarna
+   blir enkla.
 
 ## Filer och kataloger som bara finns i forken
 
@@ -34,4 +36,8 @@ beteende.
 ## Ändrat beteende utan kodändring
 
 Sådant som SE gör annorlunda genom att använda upstreams mekanismer på ett nytt sätt (t.ex. att sätta en
-befintlig KVP-nyckel). Inga ännu.
+befintlig KVP-nyckel).
+
+| Mekanism | Hur SE använder den | Status |
+|---|---|---|
+| KVP `trans-read-only` på transaktioner | Sätts när SE låser en transaktion, så att den ärvda koden (register, radering, makulering) hanterar låsta poster. Beslut 2026-11-26, design 01 avsnitt 4–5 | planerad, inte byggd |

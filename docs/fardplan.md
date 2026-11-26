@@ -17,22 +17,25 @@ Den svenska bokföringslagen kräver kontroller som GnuCash saknar:
 
 Upstream har avböjt lås och numrering: "I don't think that lock date and transaction numbering are feasible
 with GnuCash's overall design. We've always advised businesses that require that level of built-in controls
-that GnuCash isn't suitable for them." (John Ralls, gnucash-devel 2026-11-26). Därför byggs de här.
+that GnuCash isn't suitable for them." (John Ralls, gnucash-devel 2026-11-26). Därför byggs de här, i ett
+fristående projekt som bara använder GnuCash som startpunkt och källa för löpande ändringar.
 
 ## Beslut (Isak 2026-11-26)
 
 | Fråga | Beslut |
 |---|---|
 | Basgren | `future` (blivande 6.0). Inga användbara SE-releaser före 6.0, men ingen stor flytt av motorkod i mars |
-| Bokformat | Nedåtkompatibelt. Lås, serier och historik i KVP; vanlig GnuCash kan öppna boken. SE upptäcker ändringar i efterhand |
+| Bokformat | En SE-bok används i SE. Vanlig GnuCash ska kunna öppna den för granskning, inte för arbete. Lås, serier och historik i KVP, ingen feature-flagga. Ändringar utanför SE upptäcks och rapporteras som fel |
+| Förhållande till upstream | Fristående projekt. Upstream är startpunkt och källa för ändringar via synk; forken skickar inget tillbaka |
 | Första funktion | Fast lås och obruten verifikationsnumrering |
 | Första steg | Grunden: dokumentation, byggmiljö, baslinje, designskiss. Ingen funktionskod |
+| Lås och numrering | Periodlåsning (ingen "Bokför direkt"); en serie per räkenskapsår som standard. Detaljer i designskissens avsnitt 9 |
 
 Tidigare beslut som också gäller forken:
 - Filvägen före API: SE skriver filer (SIE, eSKD-XML, SRU) som laddas upp i myndighetens e-tjänst. Ingen
   nätverkskod mot Skatteverket eller Bolagsverket i det här skedet.
-- AI-märkning som i upstream: trailern `Assisted-by:` i commits, Isak lägger själv `Signed-off-by` efter
-  granskning.
+- AI-märkning: trailern `Assisted-by: Claude Code` i commits. Inget krav på `Signed-off-by`: Isak är ensam
+  utvecklare, åtminstone det närmaste året.
 - BAS-data (kontonamn ur BAS filer) läggs inte in innan rättighetsfrågan är utredd.
 
 ## Ordning
@@ -40,7 +43,7 @@ Tidigare beslut som också gäller forken:
 | Steg | Innehåll | Lagkrav |
 |---|---|---|
 | **0 Grund** (pågår) | `docs/`, byggmiljö i container, baslinje på `future`, designskiss för lås och numrering | – |
-| **1 Lås och numrering** | Låsdatum per bok som bara kan flyttas framåt. Verifikationsserier. Nummer tilldelas vid låsning i registreringsordning. Spärr mot ändring och radering av låsta transaktioner. Kontroll att serien är obruten. Upptäckt av ändringar gjorda utanför SE. Design: [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md) | BFNAR 2.1, 5.9–5.10 |
+| **1 Lås och numrering** | Periodlåsning med ett låsdatum per bok som bara kan flyttas framåt. Verifikationsserier, standard en per räkenskapsår. Nummer tilldelas vid låsning i registreringsordning. Spärr mot ändring och radering av låsta transaktioner. Kontroll att serien är obruten. Upptäckt av ändringar gjorda utanför SE. Design: [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md) | BFNAR 2.1, 5.9–5.10 |
 | **2 Rättelse** | Rättelseverifikation från en låst post, med hänvisning åt båda håll och vem/när | 5:5, 5:9 BFL, BFNAR 2.17–2.18, 5.15–5.16 |
 | **3 Behandlingshistorik** | Logg över registreringar, låsningar och systemändringar (nya konton, ändrade momssatser, programversion) som följer med boken | 5:11 BFL, BFNAR 9.16 |
 | **4 Räkenskapsår** | Räkenskapsår per bok, även brutet och förlängt; serier per år | 3 kap. BFL |

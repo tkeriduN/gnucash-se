@@ -11,8 +11,9 @@ men som inte passar in i GnuCash själv:
 - senare: SRU, momsdeklaration (eSKD), iXBRL och byte mellan BAS-årgångar med bekräftade matchningar.
 
 Upstreams underhållare har bedömt att lås och verifikationsnumrering inte passar GnuCash övergripande design
-(John Ralls på gnucash-devel 2026-11-26). Därför byggs de här och inte upstream. Rättningar och funktioner som
-upstream vill ha skickas fortfarande dit, från en separat klon av `Gnucash/gnucash`, inte från den här forken.
+(John Ralls på gnucash-devel 2026-11-26). GnuCash SE är därför ett fristående projekt med egen inriktning.
+GnuCash är startpunkten och källan för löpande ändringar, som tas in genom synk. Forken skickar inget tillbaka
+och har ingen kontakt med upstreamprojektet.
 
 ## Förhållande till upstream
 
@@ -48,10 +49,11 @@ Forkens ändringar hålls små och avgränsade så att synkningarna blir billiga
 
 ## Bokformat
 
-Böcker som skapats eller låsts i GnuCash SE ska gå att öppna i vanlig GnuCash. SE lagrar sina uppgifter (lås,
-serier, historik) i bokens KVP-data och sätter ingen feature-flagga som får vanlig GnuCash att vägra öppna
-boken. Priset är att vanlig GnuCash kan ändra låsta poster. SE måste därför upptäcka sådana ändringar i
-efterhand; se [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md).
+En bok som har skapats eller öppnats i GnuCash SE är en SE-bok och används i SE. Vanlig GnuCash ska kunna
+öppna den för att granska innehållet, men att arbeta i samma bok i både GnuCash och SE stöds inte. SE lagrar
+sina uppgifter (lås, serier, historik) i bokens KVP-data och sätter ingen feature-flagga, eftersom en sådan får
+vanlig GnuCash att vägra öppna boken helt. Ändringar som ändå görs utanför SE upptäcks och rapporteras som
+fel; se [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md).
 
 ## Innehåll i docs/
 
@@ -68,5 +70,4 @@ Kontoplanen BAS läggs inte in i forken innan rättighetsfrågan är utredd (se 
 ## Licens
 
 Samma som GnuCash: GNU General Public License, version 2 eller version 3 (de flesta filer "version 2 eller
-senare"); detaljer i `LICENSE` i repots rot. Forkens egna filer licensieras som GnuCash, så att delar kan
-skickas vidare till upstream.
+senare"); detaljer i `LICENSE` i repots rot. Forkens egna filer licensieras som GnuCash.
