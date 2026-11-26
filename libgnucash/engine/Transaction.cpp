@@ -1933,6 +1933,10 @@ xaccTransSetDatePostedGDate (Transaction *trans, GDate date)
 {
     if (!trans) return;
 
+    /* GnuCash SE: the slot is set inside the edit, so that a rollback
+     * restores it together with date_posted. */
+    xaccTransBeginEdit (trans);
+
     /* We additionally save this date into a kvp frame to ensure in
      * the future a date which was set as *date* (without time) can
      * clearly be distinguished from the time64. */
