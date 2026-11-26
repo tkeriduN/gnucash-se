@@ -4,6 +4,8 @@ from gnucash import Session, Account, Transaction, Split, GncNumeric, SessionOpe
 from gnucash.gnucash_core_c import ACCT_TYPE_BANK, ACCT_TYPE_INCOME, ACCT_TYPE_EXPENSE, ACCT_TYPE_CASH
 
 path = sys.argv[1]
+# The year of the transactions; a year that has ended can be closed.
+year = int(sys.argv[2]) if len(sys.argv) > 2 else 2026
 session = Session("xml://" + path, SessionOpenMode.SESSION_NEW_STORE)
 book = session.book
 sek = book.get_table().lookup("CURRENCY", "SEK")
@@ -38,10 +40,10 @@ def trans(day, month, year, text, ore, debit, credit):
     t.CommitEdit()
     return t
 
-trans(5, 10, 2026, "Faktura 101", 1250000, bank, sales)
-trans(12, 10, 2026, "Kontantförsäljning", 80000, cash, sales)
-trans(27, 10, 2026, "Hyra oktober", 900000, rent, bank)
-trans(3, 11, 2026, "Faktura 102", 640000, bank, sales)
+trans(5, 10, year, "Faktura 101", 1250000, bank, sales)
+trans(12, 10, year, "Kontantförsäljning", 80000, cash, sales)
+trans(27, 10, year, "Hyra oktober", 900000, rent, bank)
+trans(3, 11, year, "Faktura 102", 640000, bank, sales)
 session.save()
 session.end()
 print("skapade", path)

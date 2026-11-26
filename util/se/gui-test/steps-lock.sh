@@ -15,13 +15,13 @@ shot 03-signed
 key alt+p; wait 3
 shot 04-posted
 key Return; wait 1
-key alt+a; key Right; key Down; key Return; wait 2
+key alt+a; key Right; key Down; key Down; key Return; wait 2
 shot 05-check
 key Return; wait 1
-key alt+a; key Right; key Down; key Down; key Return; wait 3
+key alt+a; key Right; key Down; key Down; key Down; key Return; wait 3
 shot 06-history
 key Escape; wait 1
-key alt+a; key Right; key Down; key Down; key Down; key Return; wait 2
+key alt+a; key Right; key Down; key Down; key Down; key Down; key Return; wait 2
 shot 07-settings
 key Escape; wait 1
 key ctrl+s; wait 4
