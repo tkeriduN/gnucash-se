@@ -1,0 +1,198 @@
+/********************************************************************\
+ * gnc-se.hpp -- GnuCash SE: lock date and voucher numbering        *
+ * Copyright 2026 Isak Adamssvärd                                   *
+ *                                                                  *
+ * This program is free software; you can redistribute it and/or    *
+ * modify it under the terms of the GNU General Public License as   *
+ * published by the Free Software Foundation; either version 2 of   *
+ * the License, or (at your option) any later version.              *
+ *                                                                  *
+ * This program is distributed in the hope that it will be useful,  *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of   *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the    *
+ * GNU General Public License for more details.                     *
+ *                                                                  *
+ * You should have received a copy of the GNU General Public License*
+ * along with this program; if not, see                             *
+ * <https://www.gnu.org/licenses/>                                  *
+\********************************************************************/
+
+/** @file gnc-se.hpp
+ *  @brief Posting ("bokföring") of transactions as Swedish law requires it.
+ *
+ * A transaction is preliminary until it is locked. Locking is done for
+ * all transactions up to and including a date, the book's lock date,
+ * which can only move forward. When a transaction is locked it gets
+ * the next number in its voucher series, in the order the transactions
+ * were entered, and from then on it cannot be changed or deleted. A
+ * hash chain per series makes changes made outside GnuCash SE
+ * detectable.
+ *
+ * Design: docs/design/01-las-och-numrering.md.
+ */
+
+#ifndef GNC_SE_HPP
+#define GNC_SE_HPP
+
+#include <glib.h>
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <qof.h>
+#include <Transaction.h>
+
+/** How the numbers of a voucher series run. */
+enum class GncSePeriodType
+{
+    FISCAL_YEAR, ///< The numbers start again at 1 every fiscal year.
+    CONTINUOUS,  ///< One sequence for as long as the book is used.
+};
+
+struct GncSeSeries
+{
+    std::string code;        ///< E.g. "A". Letters and digits, at most 8.
+    std::string description;
+    GncSePeriodType period_type;
+};
+
+/** The outcome of gnc_se_lock_through(). */
+struct GncSeLockResult
+{
+    bool ok;           ///< False if nothing was locked; see error.
+    int locked;        ///< Number of transactions that were locked.
+    std::string error; ///< Why nothing was locked.
+};
+
+enum class GncSeIssueType
+{
+    GAP,                   ///< Numbers are missing in a series.
+    DUPLICATE_NUMBER,      ///< Two transactions carry the same number.
+    CHANGED,               ///< A locked transaction no longer matches its hash.
+    HEAD_MISMATCH,         ///< The series' recorded last hash does not match.
+    COUNTER_MISMATCH,      ///< The series' next number is lower than a used number.
+    UNKNOWN_SERIES,        ///< Locked transactions in a series the book lacks.
+    MISSING_READ_ONLY,     ///< A locked transaction has lost its read-only mark.
+    LOCKED_AFTER_LOCK_DATE,///< A locked transaction is dated after the lock date.
+    UNLOCKED_BEFORE_LOCK_DATE, ///< A preliminary transaction on or before the lock date.
+};
+
+/** Something gnc_se_verify() found. */
+struct GncSeIssue
+{
+    GncSeIssueType type;
+    std::string series;  ///< Empty when the issue is not about a series.
+    std::string period;  ///< The period within the series, e.g. "2026".
+    int64_t number;      ///< The (first) number concerned, or 0.
+    int64_t count;       ///< For GAP: how many numbers are missing.
+    GncGUID guid;        ///< The transaction concerned, or the null GUID.
+};
+
+/** Start enforcing locks: registers the commit guard with the engine.
+ *  Until this is called locked transactions are protected only by
+ *  their read-only mark. */
+void gnc_se_init ();
+
+/** Stop enforcing locks. */
+void gnc_se_shutdown ();
+
+/** Why the guard last refused an edit, or empty. Cleared by the next
+ *  accepted edit. */
+const std::string& gnc_se_last_rejection ();
+
+/** @name Book settings
+ @{ */
+
+/** Whether anything has been locked in the book. */
+bool gnc_se_book_is_se (const QofBook* book);
+
+/** The date through which the book is locked, if any. */
+std::optional<GDate> gnc_se_book_get_lock_date (const QofBook* book);
+
+/** Whether a transaction dated @a date would fall in the locked period. */
+bool gnc_se_date_is_locked (const QofBook* book, const GDate& date);
+
+/** First day of the fiscal year as {month, day}; {1, 1} by default. */
+std::pair<int, int> gnc_se_book_get_fiscal_year_start (const QofBook* book);
+
+/** Set the first day of the fiscal year. It decides in which period
+ *  of a FISCAL_YEAR series a transaction is numbered when it is
+ *  locked; transactions already locked keep their period.
+ *  @return false if the date is not a valid day of a non-leap year. */
+bool gnc_se_book_set_fiscal_year_start (QofBook* book, int month, int day);
+
+/** The book's voucher series. Empty until a series has been added or
+ *  something has been locked. */
+std::vector<GncSeSeries> gnc_se_book_get_series (const QofBook* book);
+
+/** Add a voucher series.
+ *  @return false if the code is invalid or already used. */
+bool gnc_se_book_add_series (QofBook* book, const std::string& code,
+                             const std::string& description,
+                             GncSePeriodType period_type);
+
+/** The series of transactions that have not been given one; "A" by
+ *  default. */
+std::string gnc_se_book_get_default_series (const QofBook* book);
+
+/** @return false if the book has no such series. */
+bool gnc_se_book_set_default_series (QofBook* book, const std::string& code);
+
+/** The period of @a series in which a transaction dated @a date is
+ *  numbered: the year in which the fiscal year starts, or "all" for a
+ *  CONTINUOUS series. */
+std::string gnc_se_book_get_period (const QofBook* book,
+                                    const GncSeSeries& series,
+                                    const GDate& date);
+/** @} */
+
+/** @name Transactions
+ @{ */
+
+/** Whether the transaction has been locked, i.e. is posted. */
+bool gnc_se_trans_is_locked (const Transaction* trans);
+
+/** The transaction's voucher series: its own, or the book's default. */
+std::string gnc_se_trans_get_series (const Transaction* trans);
+
+/** Choose the series of a preliminary transaction.
+ *  @return false if the transaction is locked or the book has no such
+ *  series. */
+bool gnc_se_trans_set_series (Transaction* trans, const std::string& code);
+
+/** The period of the series in which the transaction was numbered, or
+ *  empty for a preliminary transaction. */
+std::string gnc_se_trans_get_period (const Transaction* trans);
+
+/** The transaction's number in its series, or 0 for a preliminary
+ *  transaction. */
+int64_t gnc_se_trans_get_number (const Transaction* trans);
+
+/** Series and number as shown to the user, e.g. "A 12", or empty for a
+ *  preliminary transaction. */
+std::string gnc_se_trans_get_voucher (const Transaction* trans);
+
+/** What the transaction's num field held before it was locked. */
+std::string gnc_se_trans_get_former_num (const Transaction* trans);
+/** @} */
+
+/** Lock every preliminary transaction dated on or before @a date and
+ *  move the book's lock date to @a date.
+ *
+ *  The transactions are numbered per series and period in the order
+ *  they were entered. Scheduled-transaction templates, voided
+ *  transactions and transactions without splits are left alone.
+ *
+ *  Nothing is locked if @a date is before the current lock date or
+ *  after today, or if any transaction to lock is unbalanced, has a
+ *  split without an account or is in a series the book lacks. */
+GncSeLockResult gnc_se_lock_through (QofBook* book, const GDate& date);
+
+/** Check the locked transactions against their series: unbroken
+ *  numbering and unchanged content.
+ *  @return what is wrong; empty if nothing is. */
+std::vector<GncSeIssue> gnc_se_verify (QofBook* book);
+
+#endif /* GNC_SE_HPP */
