@@ -602,7 +602,7 @@ chain_next (const std::string& previous, const Transaction* trans)
 /* The commit guard                                                   */
 
 /* True while gnc_se_lock_through() locks transactions. */
-static bool locking = false;
+static bool lock_in_progress = false;
 
 static std::string last_rejection;
 
@@ -648,7 +648,7 @@ commit_guard (Transaction* trans, const Transaction* orig)
 
     if (gnc_se_trans_is_locked (trans))
     {
-        if (!locking)
+        if (!lock_in_progress)
             return reject (trans, _("Transactions are posted by locking a "
                                     "period."));
         return TRUE;
@@ -944,7 +944,7 @@ gnc_se_lock_through (QofBook* book, const GDate& date)
     std::map<PeriodKey, PeriodState> states;
     int locked = 0;
     bool failed = false;
-    locking = true;
+    lock_in_progress = true;
     for (size_t i = 0; i < to_lock.size () && !failed; ++i)
     {
         auto [iter, inserted] = states.try_emplace (keys[i]);
@@ -955,7 +955,7 @@ gnc_se_lock_through (QofBook* book, const GDate& date)
         else
             failed = true;
     }
-    locking = false;
+    lock_in_progress = false;
 
     /* Record what was numbered even if something went wrong, so that
      * the series stay consistent with their transactions. */
