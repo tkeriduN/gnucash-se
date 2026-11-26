@@ -767,6 +767,224 @@ TEST_F (SeTest, without_the_guard_nothing_is_refused)
 }
 
 /* ------------------------------------------------------------------ */
+/* Corrections                                                        */
+
+class SeCorrectionTest : public SeTest
+{
+protected:
+    void SetUp () override
+    {
+        SeTest::SetUp ();
+        add_january ();
+        ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    }
+
+    static gnc_numeric total (const Account* account)
+    {
+        return xaccAccountGetBalance (account);
+    }
+};
+
+TEST_F (SeCorrectionTest, a_correcting_entry_takes_the_original_back)
+{
+    auto bank_before {total (m_bank)};
+    auto result {gnc_se_correct (m_first, date (2025, 2, 10), "IA",
+                                 "Wrong amount", false)};
+    ASSERT_TRUE (result.ok) << result.error;
+    ASSERT_NE (result.correction, nullptr);
+    EXPECT_EQ (result.replacement, nullptr);
+    auto correction {result.correction};
+
+    /* A new, preliminary transaction in the open period... */
+    EXPECT_FALSE (gnc_se_trans_is_locked (correction));
+    auto posted {xaccTransGetDatePostedGDate (correction)};
+    EXPECT_EQ (g_date_get_month (&posted), G_DATE_FEBRUARY);
+    EXPECT_EQ (g_date_get_day (&posted), 10);
+    EXPECT_EQ (description (correction), "Correction of A 1: Entered first");
+    EXPECT_STREQ (xaccTransGetNum (correction), "");
+    EXPECT_EQ (xaccTransGetReadOnly (correction), nullptr);
+
+    /* ...with every split of the original the other way round. */
+    ASSERT_EQ (xaccTransCountSplits (correction), 2);
+    for (int i = 0; i < 2; ++i)
+    {
+        auto was {xaccTransGetSplit (m_first, i)};
+        auto now {xaccTransFindSplitByAccount (correction,
+                                               xaccSplitGetAccount (was))};
+        ASSERT_NE (now, nullptr);
+        EXPECT_TRUE (gnc_numeric_equal (xaccSplitGetValue (now),
+                                        gnc_numeric_neg (xaccSplitGetValue (was))));
+        EXPECT_TRUE (gnc_numeric_equal (xaccSplitGetAmount (now),
+                                        gnc_numeric_neg (xaccSplitGetAmount (was))));
+    }
+    EXPECT_TRUE (gnc_numeric_equal (
+                     total (m_bank),
+                     gnc_numeric_sub (bank_before, gnc_numeric_create (10000, 100),
+                                      100, GNC_HOW_RND_ROUND_HALF_UP)));
+
+    /* The two refer to each other, and the correction says who and why. */
+    EXPECT_EQ (gnc_se_trans_get_correction (m_first), correction);
+    EXPECT_EQ (gnc_se_trans_get_corrected (correction), m_first);
+    EXPECT_EQ (xaccTransGetReversedBy (m_first), correction);
+    EXPECT_EQ (gnc_se_trans_get_signature (correction), "IA");
+    EXPECT_EQ (gnc_se_trans_get_reason (correction), "Wrong amount");
+    EXPECT_EQ (gnc_se_trans_get_series (correction), "A");
+
+    /* The original is as it was. */
+    EXPECT_EQ (description (m_first), "Entered first");
+    EXPECT_TRUE (gnc_se_trans_is_locked (m_first));
+    EXPECT_TRUE (gnc_se_last_rejection ().empty ());
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeCorrectionTest, what_cannot_be_corrected)
+{
+    auto february {add (date (2025, 2, 1), 5000, "Preliminary", 5000, m_bank,
+                        m_sales)};
+    EXPECT_FALSE (gnc_se_correct (february, date (2025, 2, 10), "IA", "",
+                                  false).ok);
+    EXPECT_FALSE (gnc_se_correct (m_first, date (2025, 1, 31), "IA", "",
+                                  false).ok);
+    EXPECT_FALSE (gnc_se_correct (m_first, date (2025, 2, 10), "", "",
+                                  false).ok);
+    EXPECT_FALSE (gnc_se_correct (m_first, date (2025, 2, 10), "   ", "",
+                                  false).ok);
+    GDate invalid;
+    g_date_clear (&invalid, 1);
+    EXPECT_FALSE (gnc_se_correct (m_first, invalid, "IA", "", false).ok);
+    EXPECT_EQ (gnc_se_trans_get_correction (m_first), nullptr);
+
+    ASSERT_TRUE (gnc_se_correct (m_first, date (2025, 2, 10), " IA ", "",
+                                 false).ok);
+    EXPECT_EQ (gnc_se_trans_get_signature (
+                   gnc_se_trans_get_correction (m_first)), "IA");
+    auto again {gnc_se_correct (m_first, date (2025, 2, 11), "IA", "", false)};
+    EXPECT_FALSE (again.ok);
+    EXPECT_FALSE (again.error.empty ());
+}
+
+TEST_F (SeCorrectionTest, a_preliminary_correcting_entry_can_be_deleted)
+{
+    auto first {gnc_se_correct (m_first, date (2025, 2, 10), "IA", "", false)};
+    ASSERT_TRUE (first.ok);
+    xaccTransDestroy (first.correction);
+    EXPECT_EQ (gnc_se_trans_get_correction (m_first), nullptr);
+    EXPECT_EQ (xaccTransGetReversedBy (m_first), nullptr);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+
+    auto second {gnc_se_correct (m_first, date (2025, 2, 12), "IA", "", false)};
+    ASSERT_TRUE (second.ok) << second.error;
+    EXPECT_EQ (gnc_se_trans_get_correction (m_first), second.correction);
+}
+
+TEST_F (SeCorrectionTest, a_replacement_is_a_copy_to_put_right)
+{
+    auto result {gnc_se_correct (m_first, date (2025, 2, 10), "IA", "Wrong "
+                                 "account", true)};
+    ASSERT_TRUE (result.ok) << result.error;
+    ASSERT_NE (result.replacement, nullptr);
+    auto replacement {result.replacement};
+
+    EXPECT_FALSE (gnc_se_trans_is_locked (replacement));
+    EXPECT_EQ (description (replacement), "Entered first");
+    EXPECT_EQ (gnc_se_trans_get_replaced (replacement), m_first);
+    EXPECT_EQ (gnc_se_trans_get_corrected (replacement), nullptr);
+    EXPECT_TRUE (gnc_numeric_equal (
+                     xaccSplitGetValue (xaccTransGetSplit (replacement, 0)),
+                     xaccSplitGetValue (xaccTransGetSplit (m_first, 0))));
+
+    /* It is preliminary: this is where the mistake is put right. */
+    xaccSplitSetAccount (xaccTransGetSplit (replacement, 1), m_costs);
+    EXPECT_EQ (xaccSplitGetAccount (xaccTransGetSplit (replacement, 1)),
+               m_costs);
+    EXPECT_TRUE (gnc_se_last_rejection ().empty ());
+}
+
+TEST_F (SeCorrectionTest, posting_the_correcting_entry_marks_the_original)
+{
+    auto result {gnc_se_correct (m_first, date (2025, 2, 10), "IA",
+                                 "Wrong amount", true)};
+    ASSERT_TRUE (result.ok);
+    xaccTransSetNotes (m_first, "Checked");
+    ASSERT_TRUE (lock (date (2025, 2, 28)).ok);
+
+    EXPECT_EQ (gnc_se_trans_get_voucher (result.correction), "A 4");
+    EXPECT_EQ (gnc_se_trans_get_voucher (result.replacement), "A 5");
+    std::string notes {xaccTransGetNotes (m_first)};
+    EXPECT_NE (notes.find ("Checked\n"), std::string::npos) << notes;
+    EXPECT_NE (notes.find ("A 4"), std::string::npos) << notes;
+    EXPECT_NE (notes.find ("IA"), std::string::npos) << notes;
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+
+    /* What the correcting entry says about itself is now locked too. */
+    auto correction {result.correction};
+    xaccTransBeginEdit (correction);
+    qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (correction),
+                                            g_strdup ("XX"),
+                                            {"se", "signature"});
+    xaccTransCommitEdit (correction);
+    EXPECT_EQ (gnc_se_trans_get_signature (correction), "IA");
+    xaccTransBeginEdit (correction);
+    qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (correction),
+                                            g_strdup ("Another reason"),
+                                            {"se", "reason"});
+    xaccTransCommitEdit (correction);
+    EXPECT_EQ (gnc_se_trans_get_reason (correction), "Wrong amount");
+    xaccTransBeginEdit (correction);
+    qof_instance_set_path_kvp<GncGUID*> (
+        QOF_INSTANCE (correction), guid_copy (xaccTransGetGUID (m_second)),
+        {"se", "corrects"});
+    xaccTransCommitEdit (correction);
+    EXPECT_EQ (gnc_se_trans_get_corrected (correction), m_first);
+    xaccTransDestroy (correction);
+    EXPECT_EQ (gnc_se_trans_get_correction (m_first), correction);
+
+    /* A posted correcting entry is corrected like any other. */
+    EXPECT_FALSE (gnc_se_correct (m_first, date (2025, 3, 1), "IA", "",
+                                  false).ok);
+    auto again {gnc_se_correct (correction, date (2025, 3, 1), "IA",
+                                "The correction was wrong", false)};
+    ASSERT_TRUE (again.ok) << again.error;
+    EXPECT_EQ (description (again.correction),
+               "Correction of A 4: Correction of A 1: Entered first");
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeCorrectionTest, a_signature_changed_outside_is_found)
+{
+    auto result {gnc_se_correct (m_first, date (2025, 2, 10), "IA", "", false)};
+    ASSERT_TRUE (result.ok);
+    ASSERT_TRUE (lock (date (2025, 2, 28)).ok);
+    ASSERT_TRUE (gnc_se_verify (m_book).empty ());
+
+    gnc_se_shutdown (); /* As in plain GnuCash. */
+    qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (result.correction),
+                                            g_strdup ("XX"),
+                                            {"se", "signature"});
+    auto issues {gnc_se_verify (m_book)};
+    ASSERT_EQ (issues.size (), 1u);
+    EXPECT_EQ (issues[0].type, GncSeIssueType::CHANGED);
+    EXPECT_EQ (issues[0].number, 4);
+}
+
+TEST_F (SeCorrectionTest, a_correcting_entry_without_its_original_is_found)
+{
+    auto result {gnc_se_correct (m_third, date (2025, 2, 10), "IA", "", false)};
+    ASSERT_TRUE (result.ok);
+    ASSERT_TRUE (lock (date (2025, 2, 28)).ok);
+
+    gnc_se_shutdown (); /* As in plain GnuCash. */
+    xaccTransClearReadOnly (m_third);
+    xaccTransDestroy (m_third);
+    auto types {issue_types ()};
+    EXPECT_NE (std::find (types.begin (), types.end (),
+                          GncSeIssueType::CORRECTION_WITHOUT_ORIGINAL),
+               types.end ());
+    EXPECT_NE (std::find (types.begin (), types.end (), GncSeIssueType::GAP),
+               types.end ());
+}
+
+/* ------------------------------------------------------------------ */
 /* Verification: what is done to the book without GnuCash SE          */
 
 class SeVerifyTest : public SeTest
@@ -985,6 +1203,11 @@ protected:
     {
         qof_session_begin (m_session, m_url.c_str (), SESSION_NEW_STORE);
         ASSERT_EQ (qof_session_get_error (m_session), ERR_BACKEND_NO_ERR);
+        ASSERT_NO_FATAL_FAILURE (reopen ());
+    }
+
+    void reopen ()
+    {
         qof_session_save (m_session, nullptr);
         ASSERT_EQ (qof_session_get_error (m_session), ERR_BACKEND_NO_ERR);
         qof_session_end (m_session);
@@ -1012,7 +1235,13 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
                         m_sales)};
     ASSERT_TRUE (gnc_se_book_set_fiscal_year_start (m_book, 7, 1));
     ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    auto corrected {gnc_se_correct (m_second, date (2025, 2, 10), "IA",
+                                    "Wrong amount", true)};
+    ASSERT_TRUE (corrected.ok) << corrected.error;
     auto first_guid {*xaccTransGetGUID (m_first)};
+    auto second_guid {*xaccTransGetGUID (m_second)};
+    auto correction_guid {*xaccTransGetGUID (corrected.correction)};
+    auto replacement_guid {*xaccTransGetGUID (corrected.replacement)};
     auto february_guid {*xaccTransGetGUID (february)};
     auto hash {slot (m_first, "hash")};
 
@@ -1042,8 +1271,31 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
     auto preliminary {xaccTransLookup (&february_guid, m_book)};
     ASSERT_NE (preliminary, nullptr);
     EXPECT_FALSE (gnc_se_trans_is_locked (preliminary));
+    /* The correcting entry and its links came back as well. */
+    auto second {xaccTransLookup (&second_guid, m_book)};
+    auto correction {xaccTransLookup (&correction_guid, m_book)};
+    auto replacement {xaccTransLookup (&replacement_guid, m_book)};
+    ASSERT_NE (second, nullptr);
+    ASSERT_NE (correction, nullptr);
+    ASSERT_NE (replacement, nullptr);
+    EXPECT_EQ (gnc_se_trans_get_correction (second), correction);
+    EXPECT_EQ (gnc_se_trans_get_corrected (correction), second);
+    EXPECT_EQ (gnc_se_trans_get_replaced (replacement), second);
+    EXPECT_EQ (gnc_se_trans_get_signature (correction), "IA");
+    EXPECT_EQ (gnc_se_trans_get_reason (correction), "Wrong amount");
+
     ASSERT_TRUE (lock (date (2025, 2, 28)).ok);
-    EXPECT_EQ (gnc_se_trans_get_voucher (preliminary), "A 4");
+    EXPECT_TRUE (gnc_se_trans_is_locked (preliminary));
+    EXPECT_TRUE (gnc_se_trans_is_locked (correction));
+    EXPECT_NE (std::string {xaccTransGetNotes (second)}.find (
+                   gnc_se_trans_get_voucher (correction)), std::string::npos);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+
+    /* Posted, the correcting entry holds through another save and load. */
+    ASSERT_NO_FATAL_FAILURE (reopen ());
+    correction = xaccTransLookup (&correction_guid, m_book);
+    ASSERT_NE (correction, nullptr);
+    EXPECT_EQ (gnc_se_trans_get_signature (correction), "IA");
     EXPECT_TRUE (gnc_se_verify (m_book).empty ());
 }
 
