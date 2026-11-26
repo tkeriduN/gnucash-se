@@ -207,6 +207,19 @@ void          xaccTransBeginEdit (Transaction *trans);
     of xaccTransDestroy() was called on the transaction. */
 void          xaccTransCommitEdit (Transaction *trans);
 
+/** GnuCash SE: a guard that xaccTransCommitEdit() consults before it
+    makes an edit permanent. It is called once per edit, when the
+    outermost xaccTransCommitEdit() is reached, with the transaction as
+    edited and the copy made by xaccTransBeginEdit(). If it returns
+    FALSE the edit is rolled back with xaccTransRollbackEdit() instead
+    of being committed. It is not called while the book is shutting
+    down. Without a guard (the default) nothing changes. */
+typedef gboolean (*GncTransCommitGuard) (Transaction *trans,
+                                         const Transaction *orig);
+
+/** GnuCash SE: set the commit guard; NULL removes it. */
+void          gnc_trans_set_commit_guard (GncTransCommitGuard guard);
+
 /** The xaccTransRollbackEdit() routine rejects all edits made, and
     sets the transaction back to where it was before the editing
     started.  This includes restoring any deleted splits, removing
