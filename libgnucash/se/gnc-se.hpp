@@ -94,13 +94,33 @@ struct GncSeLockPlan
     std::vector<GncSeLockGroup> groups;
 };
 
+/** A fiscal year of the book. */
+struct GncSeFiscalYear
+{
+    std::string key;       ///< Its name in the voucher series, e.g. "2026".
+    GDate start;
+    GDate end;
+    bool stored;           ///< False for a year that is only worked out.
+    bool closed;
+    time64 closed_at;
+    std::string closed_by; ///< The signature of who closed it.
+};
+
+/** Whether something could be done, and if not, why. */
+struct GncSeResult
+{
+    bool ok;
+    std::string error;
+};
+
 /** An entry in the processing history ("behandlingshistorik"). */
 struct GncSeEvent
 {
     int64_t number;        ///< 1, 2, 3, ...
     time64 time;           ///< When it was recorded.
     std::string type;      ///< "start", "lock", "correction", "settings",
-                           ///< "account", "tax-table", "program" or "check".
+                           ///< "fiscal-year", "account", "tax-table",
+                           ///< "program" or "check".
     std::string signature; ///< Who did it, where that was asked for.
     std::string text;      ///< What happened, in the language of the user.
 };
@@ -135,6 +155,8 @@ enum class GncSeIssueType
     UNLOCKED_BEFORE_LOCK_DATE, ///< A preliminary transaction on or before the lock date.
     CORRECTION_WITHOUT_ORIGINAL, ///< A posted correcting entry whose original is gone or not posted.
     HISTORY_CHANGED,       ///< An entry in the processing history is missing or changed.
+    PERIOD_MISMATCH,       ///< A posted transaction is numbered in another
+                           ///< fiscal year than the one its date lies in.
 };
 
 /** Something gnc_se_verify() found. */
@@ -166,14 +188,50 @@ std::optional<GDate> gnc_se_book_get_lock_date (const QofBook* book);
 /** Whether a transaction dated @a date would fall in the locked period. */
 bool gnc_se_date_is_locked (const QofBook* book, const GDate& date);
 
-/** First day of the fiscal year as {month, day}; {1, 1} by default. */
+/** First day of the fiscal year as {month, day}; {1, 1} by default.
+ *  It is the pattern for fiscal years as long as the book has none of
+ *  its own; see gnc_se_book_get_fiscal_years(). */
 std::pair<int, int> gnc_se_book_get_fiscal_year_start (const QofBook* book);
 
-/** Set the first day of the fiscal year. It decides in which period
- *  of a FISCAL_YEAR series a transaction is numbered when it is
- *  locked; transactions already locked keep their period.
- *  @return false if the date is not a valid day of a non-leap year. */
+/** Set the first day of the fiscal year.
+ *  @return false if the date is not a valid day of a non-leap year, or
+ *  if the book already has fiscal years: then the year is changed by
+ *  moving the last day of the latest one. */
 bool gnc_se_book_set_fiscal_year_start (QofBook* book, int month, int day);
+
+/** @name Fiscal years
+ *
+ * A book gets its fiscal years as they are needed: the first time a
+ * period is locked, twelve-month years from the first day set with
+ * gnc_se_book_set_fiscal_year_start(), and after that one year after
+ * the other. A year can be defined beforehand, and the last day of the
+ * latest year can be moved, which gives a shortened or an extended
+ * year (at most 18 months, 3 kap. 3 § BFL). The years follow each
+ * other without gaps.
+ *
+ * Each year has a key, which is also the period of the voucher series
+ * that are numbered per fiscal year: the year it starts in, or its
+ * first day when two years start in the same calendar year.
+ @{ */
+
+/** The fiscal years the book has, earliest first. */
+std::vector<GncSeFiscalYear> gnc_se_book_get_fiscal_years (const QofBook* book);
+
+/** The fiscal year that @a date lies in: one of the book's, or the one
+ *  it would get. */
+GncSeFiscalYear gnc_se_book_get_fiscal_year (const QofBook* book,
+                                             const GDate& date);
+
+/** Define a fiscal year. If the book has none it gets this one as its
+ *  first. A year that starts the day after the latest one ends is
+ *  added. A year that starts on the same day as the latest one moves
+ *  that year's last day.
+ *
+ *  Refused if the year is longer than 18 months, if the year to change
+ *  is closed, or if a period after the new last day is already locked. */
+GncSeResult gnc_se_book_define_fiscal_year (QofBook* book, const GDate& start,
+                                            const GDate& end);
+/** @} */
 
 /** The book's voucher series. Empty until a series has been added or
  *  something has been locked. */
@@ -291,6 +349,16 @@ GncSeLockPlan gnc_se_plan_lock (QofBook* book, const GDate& date);
  *  @param signature Who locks; recorded in the processing history. */
 GncSeLockResult gnc_se_lock_through (QofBook* book, const GDate& date,
                                      const std::string& signature = "");
+
+/** Close the fiscal year that @a date lies in: lock it through its last
+ *  day and mark it closed. Closing entries are made before this, like
+ *  any other transactions of the year.
+ *
+ *  Refused if the year has not ended, if an earlier year is still
+ *  open, if @a signature is empty, or if the lock is refused.
+ *  @return As gnc_se_lock_through(); locked may be 0. */
+GncSeLockResult gnc_se_close_fiscal_year (QofBook* book, const GDate& date,
+                                          const std::string& signature);
 
 /** Count the preliminary transactions that should have been posted
  *  before @a today. Weekends are not working days; holidays are not

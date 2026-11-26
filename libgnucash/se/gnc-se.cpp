@@ -58,6 +58,7 @@ static const char* PERIOD_CONTINUOUS = "continuous";
 static const char* PERIOD_ALL = "all";
 static const char* DEFERRAL_MONTH = "month";
 static const char* DEFERRAL_QUARTER = "quarter";
+static const char* FISCAL_YEARS = "fiscal-years";
 
 /* ------------------------------------------------------------------ */
 /* Slot access                                                        */
@@ -132,6 +133,10 @@ struct BookEdit
 };
 }
 
+/* Gives a book that was locked before it had fiscal years the years of
+ * what is locked; defined further down. */
+static void migrate_fiscal_years (QofBook* book);
+
 /* Adds an entry to the processing history; defined further down. */
 static void history_append (QofBook* book, const char* type,
                             const std::string& signature,
@@ -154,6 +159,10 @@ text_printf (const char* format, ...)
 
 /* ------------------------------------------------------------------ */
 /* Book settings                                                      */
+
+/* The names of the slots directly below a path; defined further down. */
+static std::vector<std::string> child_keys (QofInstance* instance,
+                                            const Path& path);
 
 /* Records that the book is kept in GnuCash SE. */
 static void
@@ -239,6 +248,9 @@ gnc_se_book_set_fiscal_year_start (QofBook* book, int month, int day)
     if (old_month == month && old_day == day &&
         !get_string (inst (book), {SE, "fiscal-year-start"}).empty ())
         return true;
+    /* Once the book has fiscal years they follow each other. */
+    if (!child_keys (inst (book), {SE, FISCAL_YEARS}).empty ())
+        return false;
 
     BookEdit edit {book};
     set_string (inst (book), {SE, "fiscal-year-start"}, text);
@@ -375,20 +387,286 @@ gnc_se_book_set_deferral (QofBook* book, GncSeDeferral deferral)
                         "the month."));
 }
 
+/* ------------------------------------------------------------------ */
+/* Fiscal years                                                       */
+
+static GDate
+days_after (GDate date, int days)
+{
+    if (days >= 0)
+        g_date_add_days (&date, static_cast<guint> (days));
+    else
+        g_date_subtract_days (&date, static_cast<guint> (-days));
+    return date;
+}
+
+static GDate
+months_after (GDate date, int months)
+{
+    if (months >= 0)
+        g_date_add_months (&date, static_cast<guint> (months));
+    else
+        g_date_subtract_months (&date, static_cast<guint> (-months));
+    return date;
+}
+
+static std::string
+iso_date (const GDate& date)
+{
+    char text[16];
+    g_snprintf (text, sizeof text, "%04d-%02d-%02d", g_date_get_year (&date),
+                g_date_get_month (&date), g_date_get_day (&date));
+    return text;
+}
+
+static std::string
+shown_date (const GDate& date)
+{
+    char text[MAX_DATE_LENGTH + 1] = "";
+    qof_print_gdate (text, sizeof text, &date);
+    return text;
+}
+
+static bool
+year_contains (const GncSeFiscalYear& year, const GDate& date)
+{
+    return g_date_compare (&year.start, &date) <= 0 &&
+        g_date_compare (&date, &year.end) <= 0;
+}
+
+/* A year gets the calendar year it starts in as its key, which is what
+ * the voucher series of the first version were numbered by. A second
+ * year starting in the same calendar year gets its first day. */
+static std::string
+year_key (const GDate& start, const std::vector<std::string>& taken)
+{
+    auto key {std::to_string (g_date_get_year (&start))};
+    if (std::find (taken.begin (), taken.end (), key) == taken.end ())
+        return key;
+    return iso_date (start);
+}
+
+std::vector<GncSeFiscalYear>
+gnc_se_book_get_fiscal_years (const QofBook* book)
+{
+    std::vector<GncSeFiscalYear> years;
+    g_return_val_if_fail (book, years);
+    for (const auto& key : child_keys (inst (book), {SE, FISCAL_YEARS}))
+    {
+        auto start {qof_instance_get_path_kvp<GDate> (
+                inst (book), {SE, FISCAL_YEARS, key, "start"})};
+        auto end {qof_instance_get_path_kvp<GDate> (
+                inst (book), {SE, FISCAL_YEARS, key, "end"})};
+        if (!start || !end || !g_date_valid (&*start) || !g_date_valid (&*end))
+            continue;
+        auto closed_at {qof_instance_get_path_kvp<Time64> (
+                inst (book), {SE, FISCAL_YEARS, key, "closed-at"})};
+        years.push_back ({key, *start, *end, true,
+                          closed_at && closed_at->t != 0,
+                          closed_at ? closed_at->t : 0,
+                          get_string (inst (book),
+                                      {SE, FISCAL_YEARS, key, "closed-by"})});
+    }
+    std::sort (years.begin (), years.end (),
+               [] (const GncSeFiscalYear& a, const GncSeFiscalYear& b)
+               {
+                   return g_date_compare (&a.start, &b.start) < 0;
+               });
+    return years;
+}
+
+static GncSeFiscalYear
+new_year (const GDate& start, const GDate& end, std::vector<std::string>& taken)
+{
+    GncSeFiscalYear year {year_key (start, taken), start, end, false, false, 0,
+                          ""};
+    taken.push_back (year.key);
+    return year;
+}
+
+/* The years the book lacks to have one that @a date lies in, in the
+ * order to add them; the last one is the year of the date. Empty if
+ * the book has that year. */
+static std::vector<GncSeFiscalYear>
+years_to_reach (const QofBook* book, const GDate& date)
+{
+    std::vector<GncSeFiscalYear> chain;
+    auto years {gnc_se_book_get_fiscal_years (book)};
+    std::vector<std::string> taken;
+    for (const auto& year : years)
+    {
+        if (year_contains (year, date))
+            return chain;
+        taken.push_back (year.key);
+    }
+
+    if (years.empty ())
+    {
+        /* The twelve months from the book's first day of the year. */
+        auto [month, day] = gnc_se_book_get_fiscal_year_start (book);
+        GDate start;
+        g_date_set_dmy (&start, static_cast<GDateDay> (day),
+                        static_cast<GDateMonth> (month),
+                        g_date_get_year (&date));
+        if (g_date_compare (&date, &start) < 0)
+            start = months_after (start, -12);
+        chain.push_back (new_year (start, days_after (months_after (start, 12),
+                                                      -1), taken));
+        return chain;
+    }
+
+    /* Twelve-month years onwards from the latest year, or backwards
+     * from the earliest. */
+    const int limit = 2000;
+    if (g_date_compare (&date, &years.back ().end) > 0)
+    {
+        auto start {days_after (years.back ().end, 1)};
+        for (int i = 0; i < limit; ++i)
+        {
+            auto end {days_after (months_after (start, 12), -1)};
+            chain.push_back (new_year (start, end, taken));
+            if (g_date_compare (&date, &end) <= 0)
+                break;
+            start = days_after (end, 1);
+        }
+    }
+    else
+    {
+        auto end {days_after (years.front ().start, -1)};
+        for (int i = 0; i < limit; ++i)
+        {
+            auto start {months_after (days_after (end, 1), -12)};
+            chain.push_back (new_year (start, end, taken));
+            if (g_date_compare (&start, &date) <= 0)
+                break;
+            end = days_after (start, -1);
+        }
+    }
+    return chain;
+}
+
+GncSeFiscalYear
+gnc_se_book_get_fiscal_year (const QofBook* book, const GDate& date)
+{
+    GncSeFiscalYear none {"", date, date, false, false, 0, ""};
+    g_return_val_if_fail (book && g_date_valid (&date), none);
+    for (const auto& year : gnc_se_book_get_fiscal_years (book))
+        if (year_contains (year, date))
+            return year;
+    auto chain {years_to_reach (book, date)};
+    return chain.empty () ? none : chain.back ();
+}
+
+static void
+store_year (QofBook* book, const GncSeFiscalYear& year)
+{
+    qof_instance_set_path_kvp<GDate> (inst (book), year.start,
+                                      {SE, FISCAL_YEARS, year.key, "start"});
+    qof_instance_set_path_kvp<GDate> (inst (book), year.end,
+                                      {SE, FISCAL_YEARS, year.key, "end"});
+}
+
+/* Gives the book the fiscal year that @a date lies in, and those
+ * between it and the years the book has. */
+static void
+ensure_fiscal_year (QofBook* book, const GDate& date)
+{
+    for (const auto& year : years_to_reach (book, date))
+    {
+        store_year (book, year);
+        history_append (book, "fiscal-year", "",
+                        text_printf (_("Fiscal year %s was set up: %s to %s."),
+                                     year.key.c_str (),
+                                     shown_date (year.start).c_str (),
+                                     shown_date (year.end).c_str ()));
+    }
+}
+
+/* Whether @a end is a last day that a year starting on @a start can
+ * have: not before the first, and at most 18 months (3 kap. 3 § BFL). */
+static bool
+year_length_is_valid (const GDate& start, const GDate& end)
+{
+    auto limit {months_after (start, 18)};
+    return g_date_compare (&start, &end) <= 0 &&
+        g_date_compare (&end, &limit) < 0;
+}
+
+GncSeResult
+gnc_se_book_define_fiscal_year (QofBook* book, const GDate& start,
+                                const GDate& end)
+{
+    g_return_val_if_fail (book, (GncSeResult {false, "No book."}));
+    if (!g_date_valid (&start) || !g_date_valid (&end))
+        return {false, _("The date is not valid.")};
+    if (!year_length_is_valid (start, end))
+        return {false, _("A fiscal year is at most 18 months, and ends after "
+                         "it starts.")};
+
+    BookEdit edit {book};
+    migrate_fiscal_years (book);
+    auto years {gnc_se_book_get_fiscal_years (book)};
+    if (years.empty ())
+    {
+        std::vector<std::string> taken;
+        auto year {new_year (start, end, taken)};
+        store_year (book, year);
+        mark_book (book);
+        history_append (book, "fiscal-year", "",
+                        text_printf (_("Fiscal year %s was set up: %s to %s."),
+                                     year.key.c_str (),
+                                     shown_date (start).c_str (),
+                                     shown_date (end).c_str ()));
+        return {true, ""};
+    }
+
+    auto& last {years.back ()};
+    if (g_date_compare (&start, &last.start) == 0)
+    {
+        if (g_date_compare (&end, &last.end) == 0)
+            return {true, ""};
+        if (last.closed)
+            return {false, _("The fiscal year is closed and cannot be "
+                             "changed.")};
+        auto lock_date {gnc_se_book_get_lock_date (book)};
+        if (lock_date && g_date_compare (&end, &*lock_date) < 0)
+            return {false, _("The book is already posted past that day. The "
+                             "fiscal year cannot end before the lock date.")};
+        qof_instance_set_path_kvp<GDate> (inst (book), end,
+                                          {SE, FISCAL_YEARS, last.key, "end"});
+        history_append (book, "fiscal-year", "",
+                        text_printf (_("The last day of fiscal year %s was "
+                                       "moved from %s to %s."),
+                                     last.key.c_str (),
+                                     shown_date (last.end).c_str (),
+                                     shown_date (end).c_str ()));
+        return {true, ""};
+    }
+
+    auto next_start {days_after (last.end, 1)};
+    if (g_date_compare (&start, &next_start) != 0)
+        return {false, text_printf (_("Fiscal years follow each other. The "
+                                      "next one starts on %s."),
+                                    shown_date (next_start).c_str ())};
+    std::vector<std::string> taken;
+    for (const auto& year : years)
+        taken.push_back (year.key);
+    auto year {new_year (start, end, taken)};
+    store_year (book, year);
+    history_append (book, "fiscal-year", "",
+                    text_printf (_("Fiscal year %s was set up: %s to %s."),
+                                 year.key.c_str (), shown_date (start).c_str (),
+                                 shown_date (end).c_str ()));
+    return {true, ""};
+}
+
 std::string
 gnc_se_book_get_period (const QofBook* book, const GncSeSeries& series,
                         const GDate& date)
 {
     if (series.period_type == GncSePeriodType::CONTINUOUS)
         return PERIOD_ALL;
-
-    auto [start_month, start_day] = gnc_se_book_get_fiscal_year_start (book);
-    int year = g_date_get_year (&date);
-    int month = g_date_get_month (&date);
-    int day = g_date_get_day (&date);
-    if (month < start_month || (month == start_month && day < start_day))
-        --year;
-    return std::to_string (year);
+    return gnc_se_book_get_fiscal_year (book, date).key;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1247,6 +1525,22 @@ gnc_se_lock_through (QofBook* book, const GDate& date,
         gnc_se_book_add_series (book, DEFAULT_SERIES, _("Vouchers"),
                                 GncSePeriodType::FISCAL_YEAR);
 
+    /* The book gets the fiscal years of what is locked. They are the
+     * years the plan worked out, so the periods stay the same. */
+    migrate_fiscal_years (book);
+    if (!to_lock.empty ())
+    {
+        auto earliest {date};
+        for (auto trans : to_lock)
+        {
+            auto posted {xaccTransGetDatePostedGDate (trans)};
+            if (g_date_compare (&posted, &earliest) < 0)
+                earliest = posted;
+        }
+        ensure_fiscal_year (book, earliest);
+    }
+    ensure_fiscal_year (book, date);
+
     std::map<PeriodKey, PeriodState> states;
     int locked = 0;
     bool failed = false;
@@ -1300,6 +1594,77 @@ gnc_se_lock_through (QofBook* book, const GDate& date,
                     : text_printf (_("The book was posted through %s. "
                                      "Numbered: %s."),
                                    date_text, numbered.c_str ()));
+    return {true, locked, ""};
+}
+
+static void
+migrate_fiscal_years (QofBook* book)
+{
+    auto lock_date {gnc_se_book_get_lock_date (book)};
+    if (!lock_date || !child_keys (inst (book), {SE, FISCAL_YEARS}).empty ())
+        return;
+
+    auto earliest {*lock_date};
+    for (auto trans : all_transactions (book))
+    {
+        if (!gnc_se_trans_is_locked (trans))
+            continue;
+        auto posted {xaccTransGetDatePostedGDate (trans)};
+        if (g_date_valid (&posted) && g_date_compare (&posted, &earliest) < 0)
+            earliest = posted;
+    }
+    ensure_fiscal_year (book, earliest);
+    ensure_fiscal_year (book, *lock_date);
+}
+
+GncSeLockResult
+gnc_se_close_fiscal_year (QofBook* book, const GDate& date,
+                          const std::string& signature)
+{
+    g_return_val_if_fail (book, lock_error ("No book."));
+    if (!g_date_valid (&date))
+        return lock_error ("%s", _("The date is not valid."));
+    auto who {trimmed (signature)};
+    if (who.empty ())
+        return lock_error ("%s", _("Closing a fiscal year takes a signature."));
+
+    BookEdit edit {book};
+    migrate_fiscal_years (book);
+    auto year {gnc_se_book_get_fiscal_year (book, date)};
+    if (year.closed)
+        return lock_error (_("Fiscal year %s is already closed."),
+                           year.key.c_str ());
+    GDate today;
+    gnc_gdate_set_today (&today);
+    if (g_date_compare (&year.end, &today) > 0)
+        return lock_error (_("Fiscal year %s has not ended yet."),
+                           year.key.c_str ());
+
+    ensure_fiscal_year (book, date);
+    for (const auto& other : gnc_se_book_get_fiscal_years (book))
+        if (!other.closed && g_date_compare (&other.start, &year.start) < 0)
+            return lock_error (_("Fiscal year %s is still open. Close it "
+                                 "first."), other.key.c_str ());
+
+    int locked = 0;
+    auto lock_date {gnc_se_book_get_lock_date (book)};
+    if (!lock_date || g_date_compare (&*lock_date, &year.end) < 0)
+    {
+        auto result {gnc_se_lock_through (book, year.end, who)};
+        if (!result.ok)
+            return result;
+        locked = result.locked;
+    }
+
+    qof_instance_set_path_kvp<Time64> (
+        inst (book), Time64 {gnc_time (nullptr)},
+        {SE, FISCAL_YEARS, year.key, "closed-at"});
+    set_string (inst (book), {SE, FISCAL_YEARS, year.key, "closed-by"}, who);
+    history_append (book, "fiscal-year", who,
+                    text_printf (_("Fiscal year %s, %s to %s, was closed."),
+                                 year.key.c_str (),
+                                 shown_date (year.start).c_str (),
+                                 shown_date (year.end).c_str ()));
     return {true, locked, ""};
 }
 
@@ -1783,6 +2148,7 @@ issue_code (GncSeIssueType type)
     case GncSeIssueType::CORRECTION_WITHOUT_ORIGINAL:
         return "correction-without-original";
     case GncSeIssueType::HISTORY_CHANGED: return "history-changed";
+    case GncSeIssueType::PERIOD_MISMATCH: return "period-mismatch";
     }
     return "unknown";
 }
@@ -1858,6 +2224,15 @@ gnc_se_history_text (QofBook* book)
             "\t" + event.type + "\t" +
             (event.signature.empty () ? "-" : event.signature) + "\t" +
             event.text + "\n";
+
+    out += "\n";
+    out += _("Fiscal years: key, first day, last day, closed");
+    out += "\n";
+    for (const auto& year : gnc_se_book_get_fiscal_years (book))
+        out += year.key + "\t" + shown_date (year.start) + "\t" +
+            shown_date (year.end) + "\t" +
+            (year.closed ? time_text (year.closed_at) + " " + year.closed_by
+                         : std::string {"-"}) + "\n";
 
     std::map<PeriodKey, std::vector<Transaction*>> groups;
     for (auto trans : all_transactions (book))
@@ -1938,6 +2313,7 @@ gnc_se_verify (QofBook* book)
 
     auto lock_date {gnc_se_book_get_lock_date (book)};
     std::map<PeriodKey, std::vector<Transaction*>> groups;
+    auto fiscal_years {gnc_se_book_get_fiscal_years (book)};
 
     for (auto trans : all_transactions (book))
     {
@@ -1956,6 +2332,22 @@ gnc_se_verify (QofBook* book)
             if (!in_locked_period)
                 issues.push_back (issue (GncSeIssueType::LOCKED_AFTER_LOCK_DATE,
                                          key, number, 0, trans));
+            /* Numbered in the fiscal year that the date lies in. */
+            auto series {find_series (book, key.first)};
+            if (!fiscal_years.empty () && series &&
+                series->period_type == GncSePeriodType::FISCAL_YEAR)
+            {
+                auto year {std::find_if (fiscal_years.begin (),
+                                         fiscal_years.end (),
+                                         [&] (const GncSeFiscalYear& candidate)
+                                         {
+                                             return year_contains (candidate,
+                                                                   posted);
+                                         })};
+                if (year == fiscal_years.end () || year->key != key.second)
+                    issues.push_back (issue (GncSeIssueType::PERIOD_MISMATCH,
+                                             key, number, 0, trans));
+            }
             if (get_guid (inst (trans), {SE, "corrects"}))
             {
                 auto original {gnc_se_trans_get_corrected (trans)};
