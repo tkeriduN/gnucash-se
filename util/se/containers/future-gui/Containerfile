@@ -1,0 +1,13 @@
+# Byggmiljön för `future` plus en virtuell skärm, för att provköra
+# GnuCash SE:s gränssnitt på en server utan skärm.
+#
+# Bygg:  podman build -t localhost/gnucash-future-gui:ubuntu26.04 util/se/containers/future-gui
+# Kör:   se util/se/gui-test/drive.sh
+
+FROM localhost/gnucash-future:ubuntu26.04
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      xvfb xauth xdotool x11-utils imagemagick dbus-x11 at-spi2-core openbox \
+      language-pack-sv fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
