@@ -48,6 +48,10 @@
 
 static QofLogModule log_module = QOF_MOD_SESSION;
 
+/* GnuCash SE: counts backend loads in progress, see
+ * qof_session_load_in_progress() in qofsession.h. */
+static int loads_in_progress = 0;
+
 #include "qofbook-p.hpp"
 #include "qof-backend.hpp"
 #include "qofsession.hpp"
@@ -221,7 +225,9 @@ QofSessionImpl::load (QofPercentageFunc percentage_func) noexcept
     if (m_backend)
     {
         m_backend->set_percentage(percentage_func);
+        ++loads_in_progress; /* GnuCash SE: qof_session_load_in_progress() */
         m_backend->load (m_book, LOAD_TYPE_INITIAL_LOAD);
+        --loads_in_progress;
         push_error (m_backend->get_error(), {});
     }
 
@@ -497,7 +503,9 @@ QofSessionImpl::ensure_all_data_loaded () noexcept
     if (!(m_backend && m_book)) return;
     if (qof_book_get_backend (m_book) != m_backend)
         qof_book_set_backend (m_book, m_backend);
+    ++loads_in_progress; /* GnuCash SE: qof_session_load_in_progress() */
     m_backend->load(m_book, LOAD_TYPE_LOAD_ALL);
+    --loads_in_progress;
     push_error (m_backend->get_error(), {});
 }
 
@@ -619,6 +627,12 @@ qof_session_load (QofSession *session,
 {
     if (!session) return;
     session->load (percentage_func);
+}
+
+gboolean
+qof_session_load_in_progress (void)
+{
+    return loads_in_progress > 0;
 }
 
 void
