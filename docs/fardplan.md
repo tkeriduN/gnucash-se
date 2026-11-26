@@ -42,16 +42,34 @@ Tidigare beslut som också gäller forken:
 
 | Steg | Innehåll | Lagkrav |
 |---|---|---|
-| **0 Grund** (pågår) | `docs/`, byggmiljö i container, baslinje på `future`, designskiss för lås och numrering | – |
-| **1 Lås och numrering** | Periodlåsning med ett låsdatum per bok som bara kan flyttas framåt. Verifikationsserier, standard en per räkenskapsår. Nummer tilldelas vid låsning i registreringsordning. Spärr mot ändring och radering av låsta transaktioner. Kontroll att serien är obruten. Upptäckt av ändringar gjorda utanför SE. Design: [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md) | BFNAR 2.1, 5.9–5.10 |
+| **0 Grund** (klart 2026-11-26) | `docs/`, byggmiljö i container, baslinje på `future`, designskiss för lås och numrering | – |
+| **1 Lås och numrering** (byggt 2026-11-26, se designskissens avsnitt 10) | Periodlåsning med ett låsdatum per bok som bara kan flyttas framåt. Verifikationsserier, standard en per räkenskapsår. Nummer tilldelas vid låsning i registreringsordning. Spärr mot ändring och radering av låsta transaktioner. Kontroll att serien är obruten. Upptäckt av ändringar gjorda utanför SE. Design: [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md) | BFNAR 2.1, 5.9–5.10 |
 | **2 Rättelse** | Rättelseverifikation från en låst post, med hänvisning åt båda håll och vem/när | 5:5, 5:9 BFL, BFNAR 2.17–2.18, 5.15–5.16 |
 | **3 Behandlingshistorik** | Logg över registreringar, låsningar och systemändringar (nya konton, ändrade momssatser, programversion) som följer med boken | 5:11 BFL, BFNAR 9.16 |
 | **4 Räkenskapsår** | Räkenskapsår per bok, även brutet och förlängt; serier per år | 3 kap. BFL |
 | **5 Rapportering** | SRU-filer (INK2R/INK2S, NE), momsdeklaration som eSKD-XML, BAS-årgångsbyte med uttrycklig mappning och bekräftade matchningar | – |
 | **6 Senare** | iXBRL för K2-årsredovisning, ev. API-brygga (kräver avtalspart), Server Edition | – |
 
-SIE och BAS 2026-mallarna drivs upstream; forken tar dem via synken. Steg 1–3 hänger ihop och designas
-tillsammans, men byggs och levereras i den ordningen.
+Steg 1–3 hänger ihop och designas tillsammans, men byggs och levereras i den ordningen.
+
+## Avgränsning mot upstreamarbetet
+
+Isak bidrar också till `Gnucash/gnucash` i ett separat spår (egen klon, egen plan). Samma sak ska inte byggas
+på två ställen. Det som går in upstream kommer hit via synken. Läget 2026-11-26 enligt upstreamspårets plan:
+
+| Område | Upstreamspåret | Forken |
+|---|---|---|
+| Lås, verifikationsnumrering, rättelse, behandlingshistorik | Avvisat av upstream 2026-11-26; byggs inte där | **Byggs här** (steg 1–3) |
+| Räkenskapsår per bok | Inget arbete; upstreams bugg 493789 är öppen sedan 2007 | Byggs här (steg 4), enkel bokinställning redan i steg 1 |
+| Rättningar av sv_SE-mallarna och mall-laddaren | Pågår (PR mot `stable`) | Byggs inte här; kommer via synk |
+| Kontomatchning när kontoträd slås ihop | Buggfix planerad | Byggs inte här; kommer via synk |
+| BAS 2026-kontomallar | Planerat upstream | Byggs inte här; kommer via synk |
+| SIE-export och -import | Planerat upstream (övertagande av PR #2217, mot 6.0) | Byggs inte här; kommer via synk. SE behöver bara att verifikationsserie och nummer går att läsa av exporten |
+| Byte mellan BAS-årgångar | Planerat som fristående verktyg med uttrycklig mappning | **Överlapp att avgöra före steg 5**: ett verktyg räcker, antingen det fristående eller inbyggt här |
+| Redovisningskoder per konto, SRU | Skjutet till efter 6.0, diskussion med upstream först | **Överlapp att avgöra före steg 5**: vänta in upstreams lösning eller bygg eget |
+| Moms: rapport och eSKD-fil | Inget beslutat; upstream hänvisar till momstabellerna | Avgörs före steg 5 |
+
+Steg 1–4 har alltså inget överlapp. Steg 5 påbörjas inte förrän de tre markerade raderna är avgjorda.
 
 ## Tidpunkter som styr
 

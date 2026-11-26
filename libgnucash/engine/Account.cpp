@@ -43,6 +43,7 @@
 #include "qofinstance-p.h"
 #include "gnc-features.h"
 #include "guid.hpp"
+#include "gnc-se.h" /* GnuCash SE */
 
 #include <numeric>
 #include <map>
@@ -1583,7 +1584,15 @@ xaccAccountDestroy (Account *acc)
 {
     g_return_if_fail(GNC_IS_ACCOUNT(acc));
 
-    qof_instance_set_destroying(acc, TRUE);
+    /* GnuCash SE: deleting an account deletes its splits, also from
+     * read-only transactions. An account with locked transactions is
+     * therefore kept; the edit that the caller began is still ended. */
+    if (!qof_book_shutting_down (qof_instance_get_book (acc)) &&
+        gnc_se_account_has_locked (acc))
+        PWARN ("Account %s has posted transactions and was not deleted.",
+               xaccAccountGetName (acc));
+    else
+        qof_instance_set_destroying(acc, TRUE);
 
     xaccAccountCommitEdit (acc);
 }

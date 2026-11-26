@@ -44,6 +44,7 @@
 #include "gnc-exp-parser.h"
 #include "gnc-string-utils.h"
 #include "gnc-sx-instance-model.h"
+#include "gnc-se.h" /* GnuCash SE */
 #include "gnc-ui-util.h"
 #include "qof.h"
 
@@ -1422,6 +1423,26 @@ create_transactions_for_instance(GncSxInstance *instance, GList **created_txn_gu
 {
     SxTxnCreationData creation_data;
     Account *sx_template_account;
+
+    /* GnuCash SE: nothing is created in a locked period. The occurrence
+     * stays to be created, and the user is told. */
+    if (gnc_se_book_date_is_locked (gnc_get_current_book (), &instance->date))
+    {
+        if (creation_errors)
+        {
+            char date[MAX_DATE_LENGTH + 1];
+            qof_print_gdate (date, sizeof (date), &instance->date);
+            *creation_errors = g_list_append (
+                *creation_errors,
+                g_strdup_printf (_("The scheduled transaction \"%s\" for %s "
+                                   "falls in a locked period and was not "
+                                   "created. Enter it by hand in an open "
+                                   "period and skip this occurrence."),
+                                 xaccSchedXactionGetName (instance->parent->sx),
+                                 date));
+        }
+        return;
+    }
 
     sx_template_account = gnc_sx_get_template_transaction_account(instance->parent->sx);
 

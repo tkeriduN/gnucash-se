@@ -1514,10 +1514,31 @@ static void trans_cleanup_commit(QofInstance *inst)
     qof_event_gen (&trans->inst, QOF_EVENT_MODIFY, nullptr);
 }
 
+/* GnuCash SE: see gnc_trans_set_commit_guard() in Transaction.h. */
+static GncTransCommitGuard commit_guard = nullptr;
+
+void
+gnc_trans_set_commit_guard (GncTransCommitGuard guard)
+{
+    commit_guard = guard;
+}
+
 void
 xaccTransCommitEdit (Transaction *trans)
 {
     if (!trans) return;
+
+    /* GnuCash SE: let the guard veto the edit while it can still be
+     * rolled back, i.e. before the edit level drops to zero. */
+    if (commit_guard && trans->orig &&
+        qof_instance_get_editlevel (QOF_INSTANCE (trans)) == 1 &&
+        !qof_book_shutting_down (qof_instance_get_book (trans)) &&
+        !commit_guard (trans, trans->orig))
+    {
+        xaccTransRollbackEdit (trans);
+        return;
+    }
+
     ENTER ("(trans=%p)", trans);
 
     if (!qof_commit_edit (QOF_INSTANCE(trans)))
@@ -1912,6 +1933,10 @@ xaccTransSetDatePostedGDate (Transaction *trans, GDate date)
 {
     if (!trans) return;
 
+    /* GnuCash SE: the slot is set inside the edit, so that a rollback
+     * restores it together with date_posted. */
+    xaccTransBeginEdit (trans);
+
     /* We additionally save this date into a kvp frame to ensure in
      * the future a date which was set as *date* (without time) can
      * clearly be distinguished from the time64. */
@@ -1921,6 +1946,8 @@ xaccTransSetDatePostedGDate (Transaction *trans, GDate date)
     xaccTransSetDateInternal(trans, &trans->date_posted,
                              gdate_to_time64(date));
     set_gains_date_dirty (trans);
+
+    xaccTransCommitEdit (trans);
 }
 
 void

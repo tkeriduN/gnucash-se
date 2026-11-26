@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<interface>
+
+  <menu id="ActionsPlaceholder0">
+    <submenu>
+      <attribute name="label" translatable="yes">_Posting</attribute>
+      <attribute name="action">gnc-plugin-se-actions.SeMenuAction</attribute>
+      <section>
+        <item>
+          <attribute name="label" translatable="yes">_Post Through…</attribute>
+          <attribute name="action">gnc-plugin-se-actions.SeLockAction</attribute>
+          <attribute name="tooltip" translatable="yes">Post the preliminary transactions up to a date: number them and lock them</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">_Check Voucher Series</attribute>
+          <attribute name="action">gnc-plugin-se-actions.SeVerifyAction</attribute>
+          <attribute name="tooltip" translatable="yes">Check that the voucher series are unbroken and that no posted transaction has been changed</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">Voucher _Series and Fiscal Year…</attribute>
+          <attribute name="action">gnc-plugin-se-actions.SeSettingsAction</attribute>
+          <attribute name="tooltip" translatable="yes">Set the start of the fiscal year, the voucher series and how long posting may be put off</attribute>
+        </item>
+      </section>
+    </submenu>
+  </menu>
+
+</interface>

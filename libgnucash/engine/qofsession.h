@@ -197,6 +197,12 @@ typedef void (*QofPercentageFunc) (const char *message, double percent);
 void qof_session_load (QofSession *session,
                        QofPercentageFunc percentage_func);
 
+/** GnuCash SE: TRUE while a backend is loading a book into a session.
+ *    Objects that a backend creates while it loads are not edits made by
+ *    the user, and checks on edits can use this to tell them apart.
+ */
+gboolean qof_session_load_in_progress (void);
+
 /** @name Session Errors
  @{ */
 /** The qof_session_get_error() routine can be used to obtain the reason
