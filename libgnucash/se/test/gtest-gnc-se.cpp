@@ -36,6 +36,7 @@
 #include <gncEntry.h>
 #include <gncInvoice.h>
 #include <gncOwner.h>
+#include <gncTaxTable.h>
 #include <qof.h>
 #include <qofinstance-p.h>
 #include <qofsession.h>
@@ -985,6 +986,244 @@ TEST_F (SeCorrectionTest, a_correcting_entry_without_its_original_is_found)
 }
 
 /* ------------------------------------------------------------------ */
+/* The processing history                                             */
+
+class SeHistoryTest : public SeTest
+{
+protected:
+    void SetUp () override
+    {
+        SeTest::SetUp ();
+        add_january ();
+        ASSERT_TRUE (gnc_se_lock_through (m_book, date (2025, 1, 31), "IA").ok);
+        m_before = gnc_se_book_get_history (m_book).size ();
+    }
+
+    /* The entries recorded since the fixture was set up. */
+    std::vector<GncSeEvent> recorded ()
+    {
+        auto all {gnc_se_book_get_history (m_book)};
+        return {all.begin () + static_cast<long> (m_before), all.end ()};
+    }
+
+    size_t m_before {};
+};
+
+TEST_F (SeTest, the_history_starts_when_the_book_is_first_kept_in_se)
+{
+    EXPECT_TRUE (gnc_se_book_get_history (m_book).empty ());
+    add_january ();
+    gnc_se_history_sync (m_book); /* Not a GnuCash SE book yet. */
+    EXPECT_TRUE (gnc_se_book_get_history (m_book).empty ());
+
+    ASSERT_TRUE (gnc_se_lock_through (m_book, date (2025, 1, 31), " IA ").ok);
+    auto history {gnc_se_book_get_history (m_book)};
+    ASSERT_EQ (history.size (), 3u);
+
+    EXPECT_EQ (history[0].number, 1);
+    EXPECT_EQ (history[0].type, "start");
+    EXPECT_NE (history[0].text.find ("3 accounts"), std::string::npos)
+        << history[0].text;
+    EXPECT_EQ (history[1].type, "settings"); /* Series A was added. */
+    EXPECT_NE (history[1].text.find ("A"), std::string::npos);
+
+    EXPECT_EQ (history[2].number, 3);
+    EXPECT_EQ (history[2].type, "lock");
+    EXPECT_EQ (history[2].signature, "IA");
+    EXPECT_GT (history[2].time, 0);
+    EXPECT_NE (history[2].text.find ("A 2025: 1-3"), std::string::npos)
+        << history[2].text;
+    /* The hash of the last voucher ties the series to the history. */
+    EXPECT_NE (history[2].text.find (slot (m_third, "hash").substr (0, 16)),
+               std::string::npos);
+
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeHistoryTest, settings_are_recorded_when_they_change)
+{
+    ASSERT_TRUE (gnc_se_book_set_fiscal_year_start (m_book, 7, 1));
+    ASSERT_TRUE (gnc_se_book_set_fiscal_year_start (m_book, 7, 1)); /* Same. */
+    gnc_se_book_set_deferral (m_book, GncSeDeferral::QUARTER);
+    gnc_se_book_set_deferral (m_book, GncSeDeferral::QUARTER);
+    ASSERT_TRUE (gnc_se_book_add_series (m_book, "L", "Löner",
+                                         GncSePeriodType::CONTINUOUS));
+    ASSERT_TRUE (gnc_se_book_set_default_series (m_book, "L"));
+    ASSERT_TRUE (gnc_se_book_set_default_series (m_book, "L"));
+
+    auto events {recorded ()};
+    ASSERT_EQ (events.size (), 4u);
+    for (const auto& event : events)
+        EXPECT_EQ (event.type, "settings");
+    EXPECT_NE (events[0].text.find ("07-01"), std::string::npos);
+    EXPECT_NE (events[0].text.find ("01-01"), std::string::npos);
+    EXPECT_NE (events[1].text.find ("quarter"), std::string::npos);
+    EXPECT_NE (events[2].text.find ("Löner"), std::string::npos);
+    EXPECT_NE (events[3].text.find ("L"), std::string::npos);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeHistoryTest, a_correction_is_recorded_with_its_signature)
+{
+    ASSERT_TRUE (gnc_se_correct (m_first, date (2025, 2, 10), "IA",
+                                 "Wrong amount", false).ok);
+    auto events {recorded ()};
+    ASSERT_EQ (events.size (), 1u);
+    EXPECT_EQ (events[0].type, "correction");
+    EXPECT_EQ (events[0].signature, "IA");
+    EXPECT_NE (events[0].text.find ("A 1"), std::string::npos);
+    EXPECT_NE (events[0].text.find ("Wrong amount"), std::string::npos);
+}
+
+TEST_F (SeHistoryTest, changes_to_the_accounts_are_recorded)
+{
+    /* Entering transactions is not a change to the chart of accounts. */
+    add (date (2025, 2, 1), 5000, "February", 5000, m_bank, m_sales);
+    EXPECT_TRUE (recorded ().empty ());
+
+    xaccAccountBeginEdit (m_sales);
+    xaccAccountSetName (m_sales, "Försäljning tjänster");
+    xaccAccountSetCode (m_sales, "3010");
+    xaccAccountCommitEdit (m_sales);
+    auto events {recorded ()};
+    ASSERT_EQ (events.size (), 1u);
+    EXPECT_EQ (events[0].type, "account");
+    EXPECT_NE (events[0].text.find ("3001 Försäljning ("), std::string::npos)
+        << events[0].text;
+    EXPECT_NE (events[0].text.find ("3010 Försäljning tjänster"),
+               std::string::npos) << events[0].text;
+
+    auto savings {account (gnc_account_get_root (m_bank), "1940", "Sparkonto",
+                           ACCT_TYPE_BANK)};
+    events = recorded ();
+    ASSERT_EQ (events.size (), 2u);
+    EXPECT_NE (events[1].text.find ("1940 Sparkonto"), std::string::npos)
+        << events[1].text;
+
+    /* Moved under another account. */
+    xaccAccountBeginEdit (savings);
+    gnc_account_append_child (m_bank, savings);
+    xaccAccountCommitEdit (savings);
+    events = recorded ();
+    ASSERT_EQ (events.size (), 3u);
+    EXPECT_NE (events[2].text.find ("1930 Företagskonto"), std::string::npos)
+        << events[2].text;
+
+    xaccAccountBeginEdit (savings);
+    xaccAccountDestroy (savings);
+    events = recorded ();
+    ASSERT_EQ (events.size (), 4u);
+    EXPECT_EQ (events[3].type, "account");
+    EXPECT_NE (events[3].text.find ("1940 Sparkonto"), std::string::npos);
+
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeHistoryTest, changes_made_unseen_are_recorded_by_the_next_sync)
+{
+    gnc_se_history_sync (m_book);
+    EXPECT_TRUE (recorded ().empty ()); /* Nothing has changed. */
+
+    /* As when the book has been changed in plain GnuCash. */
+    gnc_se_shutdown ();
+    xaccAccountBeginEdit (m_costs);
+    xaccAccountSetName (m_costs, "Hyra");
+    xaccAccountCommitEdit (m_costs);
+    auto extra {account (gnc_account_get_root (m_bank), "6110",
+                         "Kontorsmaterial", ACCT_TYPE_EXPENSE)};
+    xaccAccountBeginEdit (m_sales); /* Has posted transactions: kept. */
+    gnc_se_init ();
+    EXPECT_TRUE (recorded ().empty ());
+
+    gnc_se_history_sync (m_book);
+    auto events {recorded ()};
+    ASSERT_EQ (events.size (), 2u);
+    EXPECT_EQ (events[0].type, "account");
+    EXPECT_EQ (events[1].type, "account");
+    gnc_se_history_sync (m_book);
+    EXPECT_EQ (recorded ().size (), 2u);
+    xaccAccountCommitEdit (m_sales);
+    (void) extra;
+}
+
+TEST_F (SeHistoryTest, changes_to_tax_tables_are_recorded)
+{
+    auto vat {account (gnc_account_get_root (m_bank), "2611", "Utgående moms",
+                       ACCT_TYPE_LIABILITY)};
+    auto before {recorded ().size ()}; /* The account itself. */
+
+    auto table {gncTaxTableCreate (m_book)};
+    gncTaxTableSetName (table, "Moms 25");
+    auto entry {gncTaxTableEntryCreate ()};
+    gncTaxTableEntrySetAccount (entry, vat);
+    gncTaxTableEntrySetType (entry, GNC_AMT_TYPE_PERCENT);
+    gncTaxTableEntrySetAmount (entry, gnc_numeric_create (25, 1));
+    gncTaxTableAddEntry (table, entry);
+
+    auto events {recorded ()};
+    ASSERT_GT (events.size (), before);
+    EXPECT_EQ (events.back ().type, "tax-table");
+    EXPECT_NE (events.back ().text.find ("Moms 25"), std::string::npos);
+    EXPECT_NE (events.back ().text.find ("2611 Utgående moms 25 %"),
+               std::string::npos) << events.back ().text;
+
+    /* A changed rate is what the history is for. */
+    auto count {events.size ()};
+    gncTaxTableEntrySetAmount (entry, gnc_numeric_create (12, 1));
+    events = recorded ();
+    ASSERT_EQ (events.size (), count + 1);
+    EXPECT_NE (events.back ().text.find ("25 %"), std::string::npos);
+    EXPECT_NE (events.back ().text.find ("12 %"), std::string::npos);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeHistoryTest, what_the_check_finds_is_recorded_once)
+{
+    gnc_se_history_record_issues (m_book, gnc_se_verify (m_book));
+    EXPECT_TRUE (recorded ().empty ()); /* Nothing found, nothing to say. */
+
+    gnc_se_shutdown (); /* As in plain GnuCash. */
+    xaccTransSetDescription (m_second, "Changed");
+    gnc_se_init ();
+    auto issues {gnc_se_verify (m_book)};
+    ASSERT_EQ (issues.size (), 1u);
+    gnc_se_history_record_issues (m_book, issues);
+    gnc_se_history_record_issues (m_book, issues);
+    auto events {recorded ()};
+    ASSERT_EQ (events.size (), 1u);
+    EXPECT_EQ (events[0].type, "check");
+    EXPECT_NE (events[0].text.find ("changed A 2025 2"), std::string::npos)
+        << events[0].text;
+}
+
+TEST_F (SeHistoryTest, a_changed_history_is_found)
+{
+    ASSERT_TRUE (gnc_se_verify (m_book).empty ());
+    qof_instance_set_path_kvp<const char*> (
+        QOF_INSTANCE (m_book), g_strdup ("Nothing happened."),
+        {"se", "history", "events", "2", "text"});
+    auto issues {gnc_se_verify (m_book)};
+    ASSERT_EQ (issues.size (), 1u);
+    EXPECT_EQ (issues[0].type, GncSeIssueType::HISTORY_CHANGED);
+    EXPECT_EQ (issues[0].number, 2);
+}
+
+TEST_F (SeHistoryTest, the_history_as_text_lists_entries_and_vouchers)
+{
+    auto corrected {gnc_se_correct (m_first, date (2025, 2, 10), "IA",
+                                    "Wrong amount", false)};
+    ASSERT_TRUE (corrected.ok);
+    ASSERT_TRUE (gnc_se_lock_through (m_book, date (2025, 2, 28), "IA").ok);
+
+    auto text {gnc_se_history_text (m_book)};
+    for (const char* expected : {"\tstart\t", "\tlock\tIA\t", "\tcorrection\tIA\t",
+                                 "A 1\t", "A 4\t", "Entered second",
+                                 "corrects A 1, signed IA: Wrong amount",
+                                 "corrected by A 4"})
+        EXPECT_NE (text.find (expected), std::string::npos) << expected;
+}
+
+/* ------------------------------------------------------------------ */
 /* Verification: what is done to the book without GnuCash SE          */
 
 class SeVerifyTest : public SeTest
@@ -1244,6 +1483,8 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
     auto replacement_guid {*xaccTransGetGUID (corrected.replacement)};
     auto february_guid {*xaccTransGetGUID (february)};
     auto hash {slot (m_first, "hash")};
+    auto history_size {gnc_se_book_get_history (m_book).size ()};
+    ASSERT_GE (history_size, 4u);
 
     ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
     EXPECT_FALSE (qof_session_load_in_progress ());
@@ -1255,6 +1496,12 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
     EXPECT_EQ (gnc_se_trans_get_former_num (first), "F-123");
     EXPECT_EQ (slot (first, "hash"), hash);
     EXPECT_NE (xaccTransGetReadOnly (first), nullptr);
+
+    EXPECT_EQ (gnc_se_book_get_history (m_book).size (), history_size);
+    EXPECT_EQ (gnc_se_book_get_history (m_book).back ().type, "correction");
+    EXPECT_EQ (gnc_se_book_get_history (m_book).back ().signature, "IA");
+    gnc_se_history_sync (m_book); /* The same program, the same accounts. */
+    EXPECT_EQ (gnc_se_book_get_history (m_book).size (), history_size);
 
     EXPECT_TRUE (gnc_se_book_is_se (m_book));
     EXPECT_TRUE (gnc_se_date_is_locked (m_book, date (2025, 1, 31)));
