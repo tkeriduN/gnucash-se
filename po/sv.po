@@ -32610,3 +32610,134 @@ msgstr "Anledning:"
 
 msgid "Also create a _copy of the original to put right"
 msgstr "Skapa också en _kopia av originalet att rätta"
+
+#, c-format
+msgid "The first day of the fiscal year was set to %s (month-day); it was %02d-%02d."
+msgstr "Räkenskapsårets första dag sattes till %s (månad-dag); den var %02d-%02d."
+
+#, c-format
+msgid "Voucher series %s was added: %s, with continuous numbering."
+msgstr "Verifikationsserie %s lades till: %s, med löpande numrering."
+
+#, c-format
+msgid "Voucher series %s was added: %s, with new numbers every fiscal year."
+msgstr "Verifikationsserie %s lades till: %s, med ny nummerföljd varje räkenskapsår."
+
+#, c-format
+msgid "The voucher series of new transactions was set to %s; it was %s."
+msgstr "Verifikationsserien för nya transaktioner sattes till %s; den var %s."
+
+msgid "Posting may be put off until 50 days after the end of the quarter."
+msgstr "Bokföringen får senareläggas till 50 dagar efter kvartalets utgång."
+
+msgid "Posting may be put off until 50 days after the end of the month."
+msgstr "Bokföringen får senareläggas till 50 dagar efter månadens utgång."
+
+#, c-format
+msgid "A correcting entry dated %s was created for %s (%s)."
+msgstr "En rättelseverifikation daterad %s skapades för %s (%s)."
+
+#, c-format
+msgid "Reason: %s"
+msgstr "Anledning: %s"
+
+#, c-format
+msgid "The book was posted through %s. No transactions were numbered."
+msgstr "Boken bokfördes till och med %s. Inga transaktioner numrerades."
+
+#, c-format
+msgid "The book was posted through %s. Numbered: %s."
+msgstr "Boken bokfördes till och med %s. Numrerat: %s."
+
+#, c-format
+msgid "%s (%s), under %s"
+msgstr "%s (%s), under %s"
+
+#, c-format
+msgid "Account added: %s."
+msgstr "Konto tillagt: %s."
+
+#, c-format
+msgid "Account changed: %s is now %s."
+msgstr "Konto ändrat: %s är nu %s."
+
+#, c-format
+msgid "Account removed: %s."
+msgstr "Konto borttaget: %s."
+
+#, c-format
+msgid "Tax table added: %s"
+msgstr "Momstabell tillagd: %s"
+
+#, c-format
+msgid "Tax table changed: %s is now %s"
+msgstr "Momstabell ändrad: %s är nu %s"
+
+#, c-format
+msgid "Tax table removed: %s"
+msgstr "Momstabell borttagen: %s"
+
+#, c-format
+msgid "The book is now kept with %s."
+msgstr "Boken förs nu med %s."
+
+#, c-format
+msgid "The processing history starts. The book is kept with %s and has %d accounts and %d tax tables."
+msgstr "Behandlingshistoriken börjar. Boken förs med %s och har %d konton och %d momstabeller."
+
+msgid "The check of the voucher series finds nothing wrong any more."
+msgstr "Kontrollen av verifikationsserierna hittar inte längre något fel."
+
+#, c-format
+msgid "The check of the voucher series found %d things wrong: %s"
+msgstr "Kontrollen av verifikationsserierna hittade %d fel: %s"
+
+msgid "Processing history"
+msgstr "Behandlingshistorik"
+
+#, c-format
+msgid "Book %s. Produced %s with %s."
+msgstr "Bok %s. Framställd %s med %s."
+
+msgid "Entries: number, time, kind, signature, what happened"
+msgstr "Händelser: nummer, tid, slag, signatur, vad som hände"
+
+msgid "Posted transactions: voucher, date, entered, posted, description, correction"
+msgstr "Bokförda transaktioner: verifikation, datum, registrerad, bokförd, beskrivning, rättelse"
+
+#, c-format
+msgid "Series %s, period %s"
+msgstr "Serie %s, period %s"
+
+#, c-format
+msgid "corrects %s, signed %s"
+msgstr "rättar %s, signatur %s"
+
+#, c-format
+msgid "corrected by %s"
+msgstr "rättad genom %s"
+
+msgid "has a correcting entry that is not posted yet"
+msgstr "har en rättelseverifikation som inte är bokförd än"
+
+#, c-format
+msgid "The processing history has been changed: entry %d is missing or altered."
+msgstr "Behandlingshistoriken har ändrats: händelse %d saknas eller är ändrad."
+
+msgid "Enter your signature to post."
+msgstr "Ange din signatur för att bokföra."
+
+msgid "Save the Processing History"
+msgstr "Spara behandlingshistoriken"
+
+msgid "Processing History"
+msgstr "Behandlingshistorik"
+
+msgid "Processing _History…"
+msgstr "Behandlings_historik…"
+
+msgid "Show what has been done to the book: periods posted, corrections, changed settings, accounts and tax tables"
+msgstr "Visa vad som har gjorts med boken: bokförda perioder, rättelser, ändrade inställningar, konton och momstabeller"
+
+msgid "_Save As…"
+msgstr "Spara _som…"

@@ -32,6 +32,7 @@
 #include "dialog-utils.h"
 #include "gnc-component-manager.h"
 #include "gnc-date-edit.h"
+#include "gnc-file.h"
 #include "gnc-hooks.h"
 #include "gnc-main-window.h"
 #include "gnc-ui.h"
@@ -50,6 +51,8 @@ static void gnc_plugin_se_cmd_verify (GSimpleAction* simple,
 static void gnc_plugin_se_cmd_settings (GSimpleAction* simple,
                                         GVariant* parameter,
                                         gpointer user_data);
+static void gnc_plugin_se_cmd_history (GSimpleAction* simple,
+                                       GVariant* parameter, gpointer user_data);
 
 static GActionEntry gnc_plugin_actions [] =
 {
@@ -57,6 +60,7 @@ static GActionEntry gnc_plugin_actions [] =
     { "SeLockAction", gnc_plugin_se_cmd_lock, nullptr, nullptr, nullptr },
     { "SeVerifyAction", gnc_plugin_se_cmd_verify, nullptr, nullptr, nullptr },
     { "SeSettingsAction", gnc_plugin_se_cmd_settings, nullptr, nullptr, nullptr },
+    { "SeHistoryAction", gnc_plugin_se_cmd_history, nullptr, nullptr, nullptr },
 };
 static guint gnc_plugin_n_actions = G_N_ELEMENTS (gnc_plugin_actions);
 
@@ -169,6 +173,9 @@ issue_text (const QofBook* book, const GncSeIssue& issue)
         return format (_("A preliminary transaction is dated in the locked "
                          "period: %s. Move it to an open period or delete it."),
                        trans.c_str ());
+    case GncSeIssueType::HISTORY_CHANGED:
+        return format (_("The processing history has been changed: entry %d "
+                         "is missing or altered."), first);
     case GncSeIssueType::CORRECTION_WITHOUT_ORIGINAL:
         return format (_("%s (%s) is a correcting entry, but the transaction "
                          "it corrects is missing or not posted."),
@@ -223,6 +230,7 @@ static bool
 verify_and_report (GtkWindow* parent, QofBook* book, bool report_success)
 {
     auto issues {gnc_se_verify (book)};
+    gnc_se_history_record_issues (book, issues);
     if (issues.empty ())
     {
         if (report_success)
@@ -252,8 +260,11 @@ struct LockDialog
     QofBook* book;
     GtkWidget* dialog;
     GtkWidget* date_edit;
+    GtkWidget* signature;
     GtkWidget* preview;
 };
+
+static bool is_blank (const char* text);
 
 static GDate
 lock_dialog_date (LockDialog* data)
@@ -299,9 +310,16 @@ lock_dialog_update (LockDialog* data)
                                 group.series.c_str (), last);
         }
     }
+    /* Who posts is recorded in the processing history. */
+    bool signed_by {!is_blank (gtk_entry_get_text (GTK_ENTRY (data->signature)))};
+    if (plan.ok && !signed_by)
+    {
+        text += "\n\n";
+        text += _("Enter your signature to post.");
+    }
     gtk_label_set_text (GTK_LABEL (data->preview), text.c_str ());
     gtk_dialog_set_response_sensitive (GTK_DIALOG (data->dialog),
-                                       GTK_RESPONSE_OK, plan.ok);
+                                       GTK_RESPONSE_OK, plan.ok && signed_by);
 }
 
 static void
@@ -343,7 +361,7 @@ lock_dialog_run (GtkWindow* parent, QofBook* book)
     if (!verify_and_report (parent, book, false))
         return;
 
-    LockDialog data {book, nullptr, nullptr, nullptr};
+    LockDialog data {book, nullptr, nullptr, nullptr, nullptr};
     data.dialog = gtk_dialog_new_with_buttons (
         _("Post Transactions"), parent,
         static_cast<GtkDialogFlags> (GTK_DIALOG_MODAL |
@@ -387,22 +405,33 @@ lock_dialog_run (GtkWindow* parent, QofBook* book)
     gtk_box_pack_start (GTK_BOX (row), data.date_edit, FALSE, FALSE, 0);
     gtk_box_pack_start (GTK_BOX (box), row, FALSE, FALSE, 0);
 
+    auto signature_row {gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6)};
+    gtk_box_pack_start (GTK_BOX (signature_row),
+                        gtk_label_new (_("Your signature:")), FALSE, FALSE, 0);
+    data.signature = gtk_entry_new ();
+    gtk_box_pack_start (GTK_BOX (signature_row), data.signature, FALSE, FALSE,
+                        0);
+    gtk_box_pack_start (GTK_BOX (box), signature_row, FALSE, FALSE, 0);
+
     data.preview = wrapped_label ("");
     gtk_box_pack_start (GTK_BOX (box), data.preview, FALSE, FALSE, 0);
 
     g_signal_connect (data.date_edit, "date_changed",
+                      G_CALLBACK (lock_dialog_date_changed_cb), &data);
+    g_signal_connect (data.signature, "changed",
                       G_CALLBACK (lock_dialog_date_changed_cb), &data);
     lock_dialog_update (&data);
     gtk_widget_show_all (box);
 
     auto response {gtk_dialog_run (GTK_DIALOG (data.dialog))};
     auto date {lock_dialog_date (&data)};
+    std::string signature {gtk_entry_get_text (GTK_ENTRY (data.signature))};
     gtk_widget_destroy (data.dialog);
     if (response != GTK_RESPONSE_OK)
         return;
 
     gnc_suspend_gui_refresh ();
-    auto result {gnc_se_lock_through (book, date)};
+    auto result {gnc_se_lock_through (book, date, signature)};
     gnc_resume_gui_refresh ();
     gnc_gui_refresh_all ();
 
@@ -809,6 +838,58 @@ settings_dialog_run (GtkWindow* parent, QofBook* book)
 }
 
 /* ------------------------------------------------------------------ */
+/* Processing History…                                                */
+
+static void
+save_history (GtkWindow* parent, const std::string& text)
+{
+    auto filename {gnc_file_dialog (parent, _("Save the Processing History"),
+                                    nullptr, nullptr, GNC_FILE_DIALOG_EXPORT)};
+    if (!filename)
+        return;
+    GError* error {nullptr};
+    if (!g_file_set_contents (filename, text.c_str (),
+                              static_cast<gssize> (text.size ()), &error))
+    {
+        gnc_error_dialog (parent, "%s", error->message);
+        g_error_free (error);
+    }
+    g_free (filename);
+}
+
+static void
+history_dialog_run (GtkWindow* parent, QofBook* book)
+{
+    auto text {gnc_se_history_text (book)};
+
+    auto dialog {gtk_dialog_new_with_buttons (
+            _("Processing History"), parent,
+            static_cast<GtkDialogFlags> (GTK_DIALOG_MODAL |
+                                         GTK_DIALOG_DESTROY_WITH_PARENT),
+            _("_Save As…"), GTK_RESPONSE_APPLY,
+            _("_Close"), GTK_RESPONSE_CLOSE,
+            nullptr)};
+    gtk_window_set_default_size (GTK_WINDOW (dialog), 900, 560);
+
+    auto view {gtk_text_view_new ()};
+    gtk_text_view_set_editable (GTK_TEXT_VIEW (view), FALSE);
+    gtk_text_view_set_cursor_visible (GTK_TEXT_VIEW (view), FALSE);
+    gtk_text_view_set_monospace (GTK_TEXT_VIEW (view), TRUE);
+    gtk_text_buffer_set_text (gtk_text_view_get_buffer (GTK_TEXT_VIEW (view)),
+                              text.c_str (), -1);
+    auto scroll {gtk_scrolled_window_new (nullptr, nullptr)};
+    gtk_container_add (GTK_CONTAINER (scroll), view);
+    gtk_box_pack_start (
+        GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), scroll,
+        TRUE, TRUE, 0);
+    gtk_widget_show_all (scroll);
+
+    while (gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_APPLY)
+        save_history (GTK_WINDOW (dialog), text);
+    gtk_widget_destroy (dialog);
+}
+
+/* ------------------------------------------------------------------ */
 /* When a book has been opened                                        */
 
 static void
@@ -849,6 +930,9 @@ book_opened_cb (gpointer session, gpointer user_data)
     if (!book || !gnc_se_book_is_se (book))
         return;
     auto parent {gnc_ui_get_main_window (nullptr)};
+    /* A new program version, and accounts and tax tables changed since
+     * the book was last open here, go into the processing history. */
+    gnc_se_history_sync (book);
     verify_and_report (parent, book, false);
     remind_of_overdue (parent, book);
 }
@@ -873,6 +957,15 @@ gnc_plugin_se_cmd_verify (GSimpleAction* simple, GVariant* parameter,
     g_return_if_fail (data != nullptr);
     verify_and_report (GTK_WINDOW (data->window), gnc_get_current_book (),
                        true);
+}
+
+static void
+gnc_plugin_se_cmd_history (GSimpleAction* simple, GVariant* parameter,
+                           gpointer user_data)
+{
+    auto data {static_cast<GncMainWindowActionData*> (user_data)};
+    g_return_if_fail (data != nullptr);
+    history_dialog_run (GTK_WINDOW (data->window), gnc_get_current_book ());
 }
 
 static void

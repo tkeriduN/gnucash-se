@@ -36,6 +36,8 @@
 #include <SX-book.h>
 #include <gnc-commodity.h>
 #include <gnc-date.h>
+#include <gnc-version.h>
+#include <gncTaxTable.h>
 #include <kvp-frame.hpp>
 #include <qofbook.h>
 #include <qofinstance-p.h>
@@ -130,6 +132,26 @@ struct BookEdit
 };
 }
 
+/* Adds an entry to the processing history; defined further down. */
+static void history_append (QofBook* book, const char* type,
+                            const std::string& signature,
+                            const std::string& text);
+
+static std::string
+text_printf (const char* format, ...) G_GNUC_PRINTF (1, 2);
+
+static std::string
+text_printf (const char* format, ...)
+{
+    va_list args;
+    va_start (args, format);
+    auto text {g_strdup_vprintf (format, args)};
+    va_end (args);
+    std::string result {text};
+    g_free (text);
+    return result;
+}
+
 /* ------------------------------------------------------------------ */
 /* Book settings                                                      */
 
@@ -213,9 +235,19 @@ gnc_se_book_set_fiscal_year_start (QofBook* book, int month, int day)
 
     char text[6];
     g_snprintf (text, sizeof text, "%02d-%02d", month, day);
+    auto [old_month, old_day] = gnc_se_book_get_fiscal_year_start (book);
+    if (old_month == month && old_day == day &&
+        !get_string (inst (book), {SE, "fiscal-year-start"}).empty ())
+        return true;
+
     BookEdit edit {book};
     set_string (inst (book), {SE, "fiscal-year-start"}, text);
     mark_book (book);
+    /* Translators: month and day as numbers, e.g. "07-01". */
+    history_append (book, "settings", "",
+                    text_printf (_("The first day of the fiscal year was set "
+                                   "to %s (month-day); it was %02d-%02d."),
+                                 text, old_month, old_day));
     return true;
 }
 
@@ -277,6 +309,14 @@ gnc_se_book_add_series (QofBook* book, const std::string& code,
                 period_type == GncSePeriodType::CONTINUOUS ? PERIOD_CONTINUOUS
                                                            : PERIOD_FISCAL_YEAR);
     mark_book (book);
+    history_append (book, "settings", "",
+                    period_type == GncSePeriodType::CONTINUOUS
+                    ? text_printf (_("Voucher series %s was added: %s, with "
+                                     "continuous numbering."),
+                                   code.c_str (), description.c_str ())
+                    : text_printf (_("Voucher series %s was added: %s, with "
+                                     "new numbers every fiscal year."),
+                                   code.c_str (), description.c_str ()));
     return true;
 }
 
@@ -294,9 +334,16 @@ gnc_se_book_set_default_series (QofBook* book, const std::string& code)
     g_return_val_if_fail (book, false);
     if (!find_series (book, code))
         return false;
+    auto old_code {gnc_se_book_get_default_series (book)};
+    if (old_code == code)
+        return true;
     BookEdit edit {book};
     set_string (inst (book), {SE, "default-series"}, code);
     mark_book (book);
+    history_append (book, "settings", "",
+                    text_printf (_("The voucher series of new transactions was "
+                                   "set to %s; it was %s."),
+                                 code.c_str (), old_code.c_str ()));
     return true;
 }
 
@@ -312,11 +359,20 @@ void
 gnc_se_book_set_deferral (QofBook* book, GncSeDeferral deferral)
 {
     g_return_if_fail (book);
+    if (deferral == gnc_se_book_get_deferral (book) &&
+        !get_string (inst (book), {SE, "deferral"}).empty ())
+        return;
     BookEdit edit {book};
     set_string (inst (book), {SE, "deferral"},
                 deferral == GncSeDeferral::QUARTER ? DEFERRAL_QUARTER
                                                    : DEFERRAL_MONTH);
     mark_book (book);
+    history_append (book, "settings", "",
+                    deferral == GncSeDeferral::QUARTER
+                    ? _("Posting may be put off until 50 days after the end of "
+                        "the quarter.")
+                    : _("Posting may be put off until 50 days after the end of "
+                        "the month."));
 }
 
 std::string
@@ -663,6 +719,10 @@ reject (const Transaction* trans, const char* reason)
     return FALSE;
 }
 
+/* Starts and stops recording changes of accounts and tax tables in the
+ * processing history; defined further down. */
+static void history_watch (bool on);
+
 /* Called by xaccTransCommitEdit() with the transaction as edited and
  * as it was when the edit began. */
 static gboolean
@@ -722,12 +782,14 @@ void
 gnc_se_init ()
 {
     gnc_trans_set_commit_guard (commit_guard);
+    history_watch (true);
 }
 
 void
 gnc_se_shutdown ()
 {
     gnc_trans_set_commit_guard (nullptr);
+    history_watch (false);
     last_rejection.clear ();
 }
 
@@ -878,6 +940,19 @@ gnc_se_correct (Transaction* original, const GDate& date,
     {
         xaccTransDestroy (correction);
         return fail (_("The correcting entry could not be created."));
+    }
+
+    {
+        char date_text[MAX_DATE_LENGTH + 1] = "";
+        qof_print_gdate (date_text, sizeof date_text, &date);
+        auto event {text_printf (_("A correcting entry dated %s was created "
+                                   "for %s (%s)."),
+                                 date_text,
+                                 gnc_se_trans_get_voucher (original).c_str (),
+                                 old_description.c_str ())};
+        if (auto why {trimmed (reason)}; !why.empty ())
+            event += " " + text_printf (_("Reason: %s"), why.c_str ());
+        history_append (xaccTransGetBook (original), "correction", who, event);
     }
 
     Transaction* replacement {nullptr};
@@ -1153,9 +1228,13 @@ gnc_se_plan_lock (QofBook* book, const GDate& date)
 }
 
 GncSeLockResult
-gnc_se_lock_through (QofBook* book, const GDate& date)
+gnc_se_lock_through (QofBook* book, const GDate& date,
+                     const std::string& signature)
 {
     g_return_val_if_fail (book, lock_error ("No book."));
+
+    /* What has happened to the accounts is recorded before the lock is. */
+    gnc_se_history_sync (book);
 
     std::vector<Transaction*> to_lock;
     std::vector<PeriodKey> keys;
@@ -1198,6 +1277,29 @@ gnc_se_lock_through (QofBook* book, const GDate& date)
     }
 
     qof_instance_set_path_kvp<GDate> (inst (book), date, {SE, "lock-date"});
+
+    char date_text[MAX_DATE_LENGTH + 1] = "";
+    qof_print_gdate (date_text, sizeof date_text, &date);
+    std::string numbered;
+    for (const auto& group : plan.groups)
+    {
+        PeriodKey key {group.series, group.period};
+        auto last {group.first_number + group.count - 1};
+        if (!numbered.empty ())
+            numbered += "; ";
+        /* Series and period, first and last number, and the start of
+         * the hash of the last one. */
+        numbered += group.series + " " + group.period + ": " +
+            std::to_string (group.first_number) + "-" + std::to_string (last) +
+            " [" + states[key].head.substr (0, 16) + "]";
+    }
+    history_append (book, "lock", trimmed (signature),
+                    numbered.empty ()
+                    ? text_printf (_("The book was posted through %s. No "
+                                     "transactions were numbered."), date_text)
+                    : text_printf (_("The book was posted through %s. "
+                                     "Numbered: %s."),
+                                   date_text, numbered.c_str ()));
     return {true, locked, ""};
 }
 
@@ -1264,6 +1366,557 @@ gnc_se_overdue (QofBook* book, const GDate& today)
             result.oldest = posted;
     }
     return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* Processing history                                                 */
+
+static const char* HISTORY = "history";
+
+/* True while the history is being written, so that what the writing
+ * itself sets off is not recorded. */
+static bool history_busy = false;
+
+static std::string
+history_chain_start (const QofBook* book)
+{
+    std::string text;
+    put (text, "gnc-se-history-1");
+    put (text, guid_string (qof_book_get_guid (book)));
+    return sha256 (text);
+}
+
+static std::string
+history_chain_next (const std::string& previous, const GncSeEvent& event)
+{
+    std::string text;
+    put (text, "gnc-se-event-1");
+    put (text, previous);
+    put (text, std::to_string (event.number));
+    put (text, std::to_string (event.time));
+    put (text, event.type);
+    put (text, event.signature);
+    put (text, event.text);
+    return sha256 (text);
+}
+
+static Path
+event_path (int64_t number, const char* field)
+{
+    return {SE, HISTORY, "events", std::to_string (number), field};
+}
+
+static bool
+history_started (const QofBook* book)
+{
+    return get_int (inst (book), {SE, HISTORY, "next"}) > 0;
+}
+
+static GncSeEvent
+read_event (const QofBook* book, int64_t number)
+{
+    auto time {qof_instance_get_path_kvp<Time64> (inst (book),
+                                                  event_path (number, "time"))};
+    return {number, time ? time->t : 0,
+            get_string (inst (book), event_path (number, "type")),
+            get_string (inst (book), event_path (number, "signature")),
+            get_string (inst (book), event_path (number, "text"))};
+}
+
+static void
+write_event (QofBook* book, const char* type, const std::string& signature,
+             const std::string& text)
+{
+    auto number {std::max<int64_t> (get_int (inst (book),
+                                             {SE, HISTORY, "next"}), 1)};
+    auto previous {get_string (inst (book), {SE, HISTORY, "head"})};
+    if (previous.empty ())
+        previous = history_chain_start (book);
+
+    GncSeEvent event {number, gnc_time (nullptr), type, signature, text};
+    auto hash {history_chain_next (previous, event)};
+    qof_instance_set_path_kvp<Time64> (inst (book), Time64 {event.time},
+                                       event_path (number, "time"));
+    set_string (inst (book), event_path (number, "type"), event.type);
+    set_string (inst (book), event_path (number, "signature"), event.signature);
+    set_string (inst (book), event_path (number, "text"), event.text);
+    set_string (inst (book), event_path (number, "hash"), hash);
+    set_int (inst (book), {SE, HISTORY, "next"}, number + 1);
+    set_string (inst (book), {SE, HISTORY, "head"}, hash);
+}
+
+/* What the history knows about an account or a tax table: a state to
+ * compare with, and a text to show. */
+struct Watched
+{
+    std::string state;
+    std::string text;
+};
+
+static std::string
+account_name (const Account* account)
+{
+    std::string code {view (xaccAccountGetCode (account))};
+    std::string name {view (xaccAccountGetName (account))};
+    return code.empty () ? name : code + " " + name;
+}
+
+/* Whether the account is one of the book's own: not the root, and not
+ * in the tree of scheduled-transaction templates or in a loose tree. */
+static bool
+account_is_watched (QofBook* book, const Account* account)
+{
+    if (gnc_account_is_root (account))
+        return false;
+    auto top {gnc_account_get_root (const_cast<Account*> (account))};
+    return top == gnc_book_get_root_account (book);
+}
+
+static Watched
+watched_account (const Account* account)
+{
+    auto parent {gnc_account_get_parent (account)};
+    auto type {xaccAccountGetType (account)};
+
+    std::string state;
+    put (state, view (xaccAccountTypeEnumAsString (type)));
+    put (state, view (xaccAccountGetCode (account)));
+    put (state, view (xaccAccountGetName (account)));
+    put (state, parent ? guid_string (xaccAccountGetGUID (parent)) : "");
+
+    auto name {account_name (account)};
+    auto text {parent && !gnc_account_is_root (parent)
+               /* Translators: an account, its type, and the account it
+                * lies under: "1930 Bank (Bank), under 19 Cash". */
+               ? text_printf (_("%s (%s), under %s"), name.c_str (),
+                              xaccAccountGetTypeStr (type),
+                              account_name (parent).c_str ())
+               : text_printf ("%s (%s)", name.c_str (),
+                              xaccAccountGetTypeStr (type))};
+    return {state, text};
+}
+
+static Watched
+watched_tax_table (const GncTaxTable* table)
+{
+    std::vector<std::pair<std::string, std::string>> entries; /* state, text */
+    for (auto node = gncTaxTableGetEntries (table); node; node = node->next)
+    {
+        auto entry {static_cast<GncTaxTableEntry*> (node->data)};
+        auto account {gncTaxTableEntryGetAccount (entry)};
+        auto percent {gncTaxTableEntryGetType (entry) == GNC_AMT_TYPE_PERCENT};
+        auto amount {gncTaxTableEntryGetAmount (entry)};
+
+        std::string state;
+        put (state, account ? guid_string (xaccAccountGetGUID (account)) : "");
+        put (state, percent ? "percent" : "value");
+        put (state, numeric_string (amount));
+        auto text {text_printf (percent ? "%s %g %%" : "%s %g",
+                                account ? account_name (account).c_str () : "",
+                                gnc_numeric_to_double (amount))};
+        entries.emplace_back (state, text);
+    }
+    std::sort (entries.begin (), entries.end ());
+
+    Watched result;
+    std::string name {view (gncTaxTableGetName (table))};
+    put (result.state, name);
+    result.text = name + ":";
+    for (const auto& [state, text] : entries)
+    {
+        put (result.state, state);
+        result.text += " " + text + ";";
+    }
+    return result;
+}
+
+/* Compares one account or tax table with what the history knows about
+ * it, records the difference and remembers the new state. With @a log
+ * false the state is only remembered. */
+static void
+sync_watched (QofBook* book, const char* kind, const GncGUID* guid,
+              const Watched* now, bool log, const char* added,
+              const char* changed, const char* removed)
+{
+    Path base {SE, HISTORY, kind, guid_string (guid)};
+    auto state_path {base};
+    state_path.push_back ("state");
+    auto text_path {base};
+    text_path.push_back ("text");
+    auto old_state {get_string (inst (book), state_path)};
+    auto old_text {get_string (inst (book), text_path)};
+
+    if (!now)
+    {
+        if (old_state.empty ())
+            return;
+        qof_instance_slot_path_delete (inst (book), state_path);
+        qof_instance_slot_path_delete (inst (book), text_path);
+        qof_instance_slot_path_delete_if_empty (inst (book), base);
+        if (log)
+            write_event (book, kind, "", text_printf (removed, old_text.c_str ()));
+        return;
+    }
+    if (now->state == old_state)
+        return;
+    set_string (inst (book), state_path, now->state);
+    set_string (inst (book), text_path, now->text);
+    if (!log)
+        return;
+    write_event (book, kind, "",
+                 old_state.empty ()
+                 ? text_printf (added, now->text.c_str ())
+                 : text_printf (changed, old_text.c_str (), now->text.c_str ()));
+}
+
+static void
+sync_account (QofBook* book, const Account* account, bool gone, bool log)
+{
+    Watched now;
+    /* An account that is being set up counts once it has a name. */
+    bool present {!gone && account_is_watched (book, account) &&
+                  !view (xaccAccountGetName (account)).empty ()};
+    if (present)
+        now = watched_account (account);
+    sync_watched (book, "account", xaccAccountGetGUID (account),
+                  present ? &now : nullptr, log,
+                  _("Account added: %s."),
+                  _("Account changed: %s is now %s."),
+                  _("Account removed: %s."));
+}
+
+/* A tax table that is a copy made for a posted invoice is not one the
+ * user changes. */
+static void
+sync_tax_table (QofBook* book, const GncTaxTable* table, bool gone, bool log)
+{
+    if (gncTaxTableGetParent (table))
+        return;
+    /* A table that is being set up counts once it has a name. */
+    if (!gone && view (gncTaxTableGetName (table)).empty ())
+        return;
+    Watched now;
+    if (!gone)
+        now = watched_tax_table (table);
+    sync_watched (book, "tax-table", qof_instance_get_guid (table),
+                  gone ? nullptr : &now, log,
+                  _("Tax table added: %s"),
+                  _("Tax table changed: %s is now %s"),
+                  _("Tax table removed: %s"));
+}
+
+static std::string
+program_text ()
+{
+    return std::string {"GnuCash SE "} + gnc_version () + " (" +
+        gnc_build_id () + ")";
+}
+
+/* Brings what the history knows up to date with the whole book. */
+static void
+sync_everything (QofBook* book, bool log)
+{
+    auto program {program_text ()};
+    if (get_string (inst (book), {SE, HISTORY, "program"}) != program)
+    {
+        set_string (inst (book), {SE, HISTORY, "program"}, program);
+        if (log)
+            write_event (book, "program", "",
+                         text_printf (_("The book is now kept with %s."),
+                                      program.c_str ()));
+    }
+
+    std::vector<std::string> seen;
+    gnc_account_foreach_descendant (
+        gnc_book_get_root_account (book), [&] (Account* account)
+        {
+            seen.push_back (guid_string (xaccAccountGetGUID (account)));
+            sync_account (book, account, false, log);
+        });
+    std::sort (seen.begin (), seen.end ());
+    for (const auto& key : child_keys (inst (book), {SE, HISTORY, "account"}))
+        if (!std::binary_search (seen.begin (), seen.end (), key))
+        {
+            GncGUID guid;
+            if (string_to_guid (key.c_str (), &guid))
+                sync_watched (book, "account", &guid, nullptr, log, "", "",
+                              _("Account removed: %s."));
+        }
+
+    seen.clear ();
+    for (auto node = gncTaxTableGetTables (book); node; node = node->next)
+    {
+        auto table {static_cast<GncTaxTable*> (node->data)};
+        if (gncTaxTableGetParent (table))
+            continue;
+        seen.push_back (guid_string (qof_instance_get_guid (table)));
+        sync_tax_table (book, table, false, log);
+    }
+    std::sort (seen.begin (), seen.end ());
+    for (const auto& key : child_keys (inst (book), {SE, HISTORY, "tax-table"}))
+        if (!std::binary_search (seen.begin (), seen.end (), key))
+        {
+            GncGUID guid;
+            if (string_to_guid (key.c_str (), &guid))
+                sync_watched (book, "tax-table", &guid, nullptr, log, "", "",
+                              _("Tax table removed: %s"));
+        }
+}
+
+/* The first entry: from here on changes are recorded. */
+static void
+history_start (QofBook* book)
+{
+    sync_everything (book, false);
+    auto accounts {child_keys (inst (book), {SE, HISTORY, "account"}).size ()};
+    auto tables {child_keys (inst (book), {SE, HISTORY, "tax-table"}).size ()};
+    write_event (book, "start", "",
+                 text_printf (_("The processing history starts. The book is "
+                                "kept with %s and has %d accounts and %d tax "
+                                "tables."),
+                              program_text ().c_str (),
+                              static_cast<int> (accounts),
+                              static_cast<int> (tables)));
+}
+
+static void
+history_append (QofBook* book, const char* type, const std::string& signature,
+                const std::string& text)
+{
+    auto was_busy {history_busy};
+    history_busy = true;
+    {
+        BookEdit edit {book};
+        if (!history_started (book))
+            history_start (book);
+        write_event (book, type, signature, text);
+    }
+    history_busy = was_busy;
+}
+
+void
+gnc_se_history_sync (QofBook* book)
+{
+    g_return_if_fail (book);
+    if (history_busy || !gnc_se_book_is_se (book) ||
+        qof_book_is_readonly (book) || qof_book_shutting_down (book))
+        return;
+
+    history_busy = true;
+    {
+        BookEdit edit {book};
+        if (history_started (book))
+            sync_everything (book, true);
+        else
+            history_start (book);
+    }
+    history_busy = false;
+}
+
+/* Records a change of an account or a tax table as it happens. */
+static void
+history_event_handler (QofInstance* entity, QofEventId event_type,
+                       gpointer handler_data, gpointer event_data)
+{
+    if (history_busy || !(event_type & (QOF_EVENT_MODIFY | QOF_EVENT_DESTROY)))
+        return;
+    bool is_account = GNC_IS_ACCOUNT (entity) != 0;
+    if (!is_account && !GNC_IS_TAXTABLE (entity))
+        return;
+    auto book {qof_instance_get_book (entity)};
+    if (!book || qof_book_shutting_down (book) || qof_book_is_readonly (book) ||
+        qof_session_load_in_progress () || !history_started (book))
+        return;
+
+    bool gone {(event_type & QOF_EVENT_DESTROY) != 0};
+    history_busy = true;
+    {
+        BookEdit edit {book};
+        if (is_account)
+            sync_account (book, GNC_ACCOUNT (entity), gone, true);
+        else
+            sync_tax_table (book, GNC_TAXTABLE (entity), gone, true);
+    }
+    history_busy = false;
+}
+
+static void
+history_watch (bool on)
+{
+    static gint handler_id = 0;
+    if (on && !handler_id)
+        handler_id = qof_event_register_handler (history_event_handler, nullptr);
+    else if (!on && handler_id)
+    {
+        qof_event_unregister_handler (handler_id);
+        handler_id = 0;
+    }
+}
+
+std::vector<GncSeEvent>
+gnc_se_book_get_history (const QofBook* book)
+{
+    std::vector<GncSeEvent> events;
+    g_return_val_if_fail (book, events);
+    auto next {get_int (inst (book), {SE, HISTORY, "next"})};
+    for (int64_t number = 1; number < next; ++number)
+        if (!get_string (inst (book), event_path (number, "hash")).empty ())
+            events.push_back (read_event (book, number));
+    return events;
+}
+
+static const char*
+issue_code (GncSeIssueType type)
+{
+    switch (type)
+    {
+    case GncSeIssueType::GAP: return "gap";
+    case GncSeIssueType::DUPLICATE_NUMBER: return "duplicate-number";
+    case GncSeIssueType::CHANGED: return "changed";
+    case GncSeIssueType::HEAD_MISMATCH: return "head-mismatch";
+    case GncSeIssueType::COUNTER_MISMATCH: return "counter-mismatch";
+    case GncSeIssueType::UNKNOWN_SERIES: return "unknown-series";
+    case GncSeIssueType::MISSING_READ_ONLY: return "missing-read-only";
+    case GncSeIssueType::LOCKED_AFTER_LOCK_DATE: return "posted-after-lock-date";
+    case GncSeIssueType::UNLOCKED_BEFORE_LOCK_DATE:
+        return "preliminary-in-locked-period";
+    case GncSeIssueType::CORRECTION_WITHOUT_ORIGINAL:
+        return "correction-without-original";
+    case GncSeIssueType::HISTORY_CHANGED: return "history-changed";
+    }
+    return "unknown";
+}
+
+void
+gnc_se_history_record_issues (QofBook* book,
+                              const std::vector<GncSeIssue>& issues)
+{
+    g_return_if_fail (book);
+    if (!gnc_se_book_is_se (book) || qof_book_is_readonly (book))
+        return;
+
+    std::string list;
+    for (const auto& found : issues)
+    {
+        if (!list.empty ())
+            list += "; ";
+        list += issue_code (found.type);
+        if (!found.series.empty ())
+            list += " " + found.series + " " + found.period;
+        if (found.number > 0)
+            list += " " + std::to_string (found.number);
+        if (!guid_equal (&found.guid, guid_null ()))
+            list += " " + guid_string (&found.guid);
+    }
+    /* The same findings are recorded once, not every time they are
+     * found again. */
+    auto digest {issues.empty () ? std::string {} : sha256 (list)};
+    if (digest == get_string (inst (book), {SE, HISTORY, "last-check"}))
+        return;
+
+    BookEdit edit {book};
+    history_append (book, "check", "",
+                    issues.empty ()
+                    ? std::string {_("The check of the voucher series finds "
+                                     "nothing wrong any more.")}
+                    : text_printf (_("The check of the voucher series found "
+                                     "%d things wrong: %s"),
+                                   static_cast<int> (issues.size ()),
+                                   list.c_str ()));
+    set_string (inst (book), {SE, HISTORY, "last-check"}, digest);
+}
+
+static std::string
+time_text (time64 time)
+{
+    if (!time)
+        return "-";
+    auto text {gnc_print_time64 (time, "%Y-%m-%d %H:%M:%S")};
+    std::string result {text ? text : ""};
+    g_free (text);
+    return result;
+}
+
+std::string
+gnc_se_history_text (QofBook* book)
+{
+    g_return_val_if_fail (book, "");
+    gnc_se_history_sync (book);
+
+    std::string out;
+    out += _("Processing history");
+    out += "\n";
+    out += text_printf (_("Book %s. Produced %s with %s."),
+                        guid_string (qof_book_get_guid (book)).c_str (),
+                        time_text (gnc_time (nullptr)).c_str (),
+                        program_text ().c_str ());
+    out += "\n\n";
+    out += _("Entries: number, time, kind, signature, what happened");
+    out += "\n";
+    for (const auto& event : gnc_se_book_get_history (book))
+        out += std::to_string (event.number) + "\t" + time_text (event.time) +
+            "\t" + event.type + "\t" +
+            (event.signature.empty () ? "-" : event.signature) + "\t" +
+            event.text + "\n";
+
+    std::map<PeriodKey, std::vector<Transaction*>> groups;
+    for (auto trans : all_transactions (book))
+        if (gnc_se_trans_is_locked (trans))
+            groups[{get_string (inst (trans), {SE, "series"}),
+                    gnc_se_trans_get_period (trans)}].push_back (trans);
+
+    out += "\n";
+    out += _("Posted transactions: voucher, date, entered, posted, "
+             "description, correction");
+    out += "\n";
+    for (auto& [key, transactions] : groups)
+    {
+        std::sort (transactions.begin (), transactions.end (),
+                   [] (const Transaction* a, const Transaction* b)
+                   {
+                       return gnc_se_trans_get_number (a) <
+                           gnc_se_trans_get_number (b);
+                   });
+        out += text_printf (_("Series %s, period %s"), key.first.c_str (),
+                            key.second.c_str ());
+        out += "\n";
+        for (auto trans : transactions)
+        {
+            char date[MAX_DATE_LENGTH + 1] = "";
+            auto posted {xaccTransGetDatePostedGDate (trans)};
+            qof_print_gdate (date, sizeof date, &posted);
+            auto locked_at {qof_instance_get_path_kvp<Time64> (
+                    inst (trans), {SE, "locked-at"})};
+
+            std::string correction;
+            if (auto original {gnc_se_trans_get_corrected (trans)})
+            {
+                correction = text_printf (
+                    _("corrects %s, signed %s"),
+                    gnc_se_trans_get_voucher (original).c_str (),
+                    gnc_se_trans_get_signature (trans).c_str ());
+                if (auto why {gnc_se_trans_get_reason (trans)}; !why.empty ())
+                    correction += ": " + why;
+            }
+            if (auto by {gnc_se_trans_get_correction (trans)})
+            {
+                if (!correction.empty ())
+                    correction += "; ";
+                auto voucher {gnc_se_trans_get_voucher (by)};
+                correction += voucher.empty ()
+                    ? std::string {_("has a correcting entry that is not "
+                                     "posted yet")}
+                    : text_printf (_("corrected by %s"), voucher.c_str ());
+            }
+
+            out += gnc_se_trans_get_voucher (trans) + "\t" + date + "\t" +
+                time_text (xaccTransGetDateEntered (trans)) + "\t" +
+                time_text (locked_at ? locked_at->t : 0) + "\t" +
+                std::string {view (xaccTransGetDescription (trans))} + "\t" +
+                correction + "\n";
+        }
+    }
+    return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1378,5 +2031,25 @@ gnc_se_verify (QofBook* book)
             issues.push_back (issue (GncSeIssueType::HEAD_MISMATCH, key,
                                      expected - 1, 0, nullptr));
     }
+    /* The processing history. */
+    auto next_event {get_int (inst (book), {SE, HISTORY, "next"})};
+    auto previous_hash {history_chain_start (book)};
+    bool previous_hash_known = true;
+    for (int64_t number = 1; number < next_event; ++number)
+    {
+        auto stored {get_string (inst (book), event_path (number, "hash"))};
+        if (stored.empty () ||
+            (previous_hash_known &&
+             history_chain_next (previous_hash,
+                                 read_event (book, number)) != stored))
+            issues.push_back (issue (GncSeIssueType::HISTORY_CHANGED, {}, number,
+                                     0, nullptr));
+        previous_hash_known = !stored.empty ();
+        previous_hash = stored;
+    }
+    if (next_event > 1 && previous_hash_known &&
+        get_string (inst (book), {SE, HISTORY, "head"}) != previous_hash)
+        issues.push_back (issue (GncSeIssueType::HISTORY_CHANGED, {},
+                                 next_event - 1, 0, nullptr));
     return issues;
 }

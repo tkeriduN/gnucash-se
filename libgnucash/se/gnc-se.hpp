@@ -94,6 +94,17 @@ struct GncSeLockPlan
     std::vector<GncSeLockGroup> groups;
 };
 
+/** An entry in the processing history ("behandlingshistorik"). */
+struct GncSeEvent
+{
+    int64_t number;        ///< 1, 2, 3, ...
+    time64 time;           ///< When it was recorded.
+    std::string type;      ///< "start", "lock", "correction", "settings",
+                           ///< "account", "tax-table", "program" or "check".
+    std::string signature; ///< Who did it, where that was asked for.
+    std::string text;      ///< What happened, in the language of the user.
+};
+
 /** The outcome of gnc_se_correct(). */
 struct GncSeCorrection
 {
@@ -123,6 +134,7 @@ enum class GncSeIssueType
     LOCKED_AFTER_LOCK_DATE,///< A locked transaction is dated after the lock date.
     UNLOCKED_BEFORE_LOCK_DATE, ///< A preliminary transaction on or before the lock date.
     CORRECTION_WITHOUT_ORIGINAL, ///< A posted correcting entry whose original is gone or not posted.
+    HISTORY_CHANGED,       ///< An entry in the processing history is missing or changed.
 };
 
 /** Something gnc_se_verify() found. */
@@ -131,7 +143,8 @@ struct GncSeIssue
     GncSeIssueType type;
     std::string series;  ///< Empty when the issue is not about a series.
     std::string period;  ///< The period within the series, e.g. "2026".
-    int64_t number;      ///< The (first) number concerned, or 0.
+    int64_t number;      ///< The (first) number concerned, or 0. For
+                         ///< HISTORY_CHANGED: the number of the entry.
     int64_t count;       ///< For GAP: how many numbers are missing.
     GncGUID guid;        ///< The transaction concerned, or the null GUID.
 };
@@ -273,16 +286,53 @@ GncSeLockPlan gnc_se_plan_lock (QofBook* book, const GDate& date);
  *  is after today, if any transaction to lock is unbalanced, has a
  *  split without an account or is in a series the book lacks, or if
  *  there is a preliminary transaction in the period that is already
- *  locked. */
-GncSeLockResult gnc_se_lock_through (QofBook* book, const GDate& date);
+ *  locked.
+ *
+ *  @param signature Who locks; recorded in the processing history. */
+GncSeLockResult gnc_se_lock_through (QofBook* book, const GDate& date,
+                                     const std::string& signature = "");
 
 /** Count the preliminary transactions that should have been posted
  *  before @a today. Weekends are not working days; holidays are not
  *  known. */
 GncSeOverdue gnc_se_overdue (QofBook* book, const GDate& today);
 
+/** @name Processing history
+ *
+ * A record, kept in the book, of what has been done to the system
+ * (BFNAR 2013:2 point 9.16): periods locked, corrections made, settings
+ * changed, accounts and tax tables added, changed or removed, and the
+ * versions of the program that have been used. The entries are chained
+ * with hashes like the voucher series. When each transaction was
+ * entered and posted is recorded on the transaction itself.
+ *
+ * The history starts the first time something is recorded, with the
+ * accounts and tax tables as they are then.
+ @{ */
+
+/** The entries, oldest first. */
+std::vector<GncSeEvent> gnc_se_book_get_history (const QofBook* book);
+
+/** Record what has changed without being noticed as it happened: a new
+ *  program version, and accounts and tax tables changed while events
+ *  were off or in another program. Called when a book has been opened
+ *  and before a period is locked. Does nothing in a book that is not
+ *  kept in GnuCash SE or is read-only. */
+void gnc_se_history_sync (QofBook* book);
+
+/** Record what gnc_se_verify() found, unless it is what was recorded
+ *  the last time. */
+void gnc_se_history_record_issues (QofBook* book,
+                                   const std::vector<GncSeIssue>& issues);
+
+/** The processing history as text: the entries, and every posted
+ *  transaction with its voucher number and when it was entered and
+ *  posted. */
+std::string gnc_se_history_text (QofBook* book);
+/** @} */
+
 /** Check the locked transactions against their series: unbroken
- *  numbering and unchanged content.
+ *  numbering and unchanged content, and the processing history.
  *  @return what is wrong; empty if nothing is. */
 std::vector<GncSeIssue> gnc_se_verify (QofBook* book);
 
