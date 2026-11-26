@@ -44,6 +44,8 @@
 #include <qof.h>
 #include <Transaction.h>
 
+#include "gnc-se.h"
+
 /** How the numbers of a voucher series run. */
 enum class GncSePeriodType
 {
@@ -56,6 +58,40 @@ struct GncSeSeries
     std::string code;        ///< E.g. "A". Letters and digits, at most 8.
     std::string description;
     GncSePeriodType period_type;
+};
+
+/** When transactions other than cash payments have to be posted at
+ *  the latest (BFNAR 2013:2, points 3.6 and 3.7). */
+enum class GncSeDeferral
+{
+    MONTH,   ///< 50 days after the end of the month.
+    QUARTER, ///< 50 days after the end of the quarter (turnover at most 3 MSEK).
+};
+
+/** Preliminary transactions that should have been posted by now. */
+struct GncSeOverdue
+{
+    int cash;  ///< With a cash account: due the next working day.
+    int other; ///< Others: due according to the book's deferral.
+    std::optional<GDate> oldest; ///< The earliest date among them.
+};
+
+/** What locking through a date would number in one series' period. */
+struct GncSeLockGroup
+{
+    std::string series;
+    std::string period;
+    int count;            ///< Transactions to lock.
+    int64_t first_number; ///< The number the first of them gets.
+};
+
+/** What gnc_se_lock_through() would do. */
+struct GncSeLockPlan
+{
+    bool ok;           ///< False if the date cannot be locked; see error.
+    std::string error;
+    int total;         ///< Transactions to lock in all.
+    std::vector<GncSeLockGroup> groups;
 };
 
 /** The outcome of gnc_se_lock_through(). */
@@ -90,14 +126,6 @@ struct GncSeIssue
     GncGUID guid;        ///< The transaction concerned, or the null GUID.
 };
 
-/** Start enforcing locks: registers the commit guard with the engine.
- *  Until this is called locked transactions are protected only by
- *  their read-only mark. */
-void gnc_se_init ();
-
-/** Stop enforcing locks. */
-void gnc_se_shutdown ();
-
 /** Why the guard last refused an edit, or empty. Cleared by the next
  *  accepted edit. */
 const std::string& gnc_se_last_rejection ();
@@ -105,7 +133,8 @@ const std::string& gnc_se_last_rejection ();
 /** @name Book settings
  @{ */
 
-/** Whether anything has been locked in the book. */
+/** Whether the book is kept in GnuCash SE: something has been locked
+ *  or one of the settings below has been made. */
 bool gnc_se_book_is_se (const QofBook* book);
 
 /** The date through which the book is locked, if any. */
@@ -140,6 +169,10 @@ std::string gnc_se_book_get_default_series (const QofBook* book);
 /** @return false if the book has no such series. */
 bool gnc_se_book_set_default_series (QofBook* book, const std::string& code);
 
+/** How long posting may be put off; MONTH by default. */
+GncSeDeferral gnc_se_book_get_deferral (const QofBook* book);
+void gnc_se_book_set_deferral (QofBook* book, GncSeDeferral deferral);
+
 /** The period of @a series in which a transaction dated @a date is
  *  numbered: the year in which the fiscal year starts, or "all" for a
  *  CONTINUOUS series. */
@@ -150,9 +183,6 @@ std::string gnc_se_book_get_period (const QofBook* book,
 
 /** @name Transactions
  @{ */
-
-/** Whether the transaction has been locked, i.e. is posted. */
-bool gnc_se_trans_is_locked (const Transaction* trans);
 
 /** The transaction's voucher series: its own, or the book's default. */
 std::string gnc_se_trans_get_series (const Transaction* trans);
@@ -178,6 +208,10 @@ std::string gnc_se_trans_get_voucher (const Transaction* trans);
 std::string gnc_se_trans_get_former_num (const Transaction* trans);
 /** @} */
 
+/** Work out what gnc_se_lock_through() would lock, without changing
+ *  the book. */
+GncSeLockPlan gnc_se_plan_lock (QofBook* book, const GDate& date);
+
 /** Lock every preliminary transaction dated on or before @a date and
  *  move the book's lock date to @a date.
  *
@@ -185,10 +219,17 @@ std::string gnc_se_trans_get_former_num (const Transaction* trans);
  *  they were entered. Scheduled-transaction templates, voided
  *  transactions and transactions without splits are left alone.
  *
- *  Nothing is locked if @a date is before the current lock date or
- *  after today, or if any transaction to lock is unbalanced, has a
- *  split without an account or is in a series the book lacks. */
+ *  Nothing is locked if @a date is not after the current lock date or
+ *  is after today, if any transaction to lock is unbalanced, has a
+ *  split without an account or is in a series the book lacks, or if
+ *  there is a preliminary transaction in the period that is already
+ *  locked. */
 GncSeLockResult gnc_se_lock_through (QofBook* book, const GDate& date);
+
+/** Count the preliminary transactions that should have been posted
+ *  before @a today. Weekends are not working days; holidays are not
+ *  known. */
+GncSeOverdue gnc_se_overdue (QofBook* book, const GDate& today);
 
 /** Check the locked transactions against their series: unbroken
  *  numbering and unchanged content.

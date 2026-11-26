@@ -31,6 +31,7 @@
 #include "gnc-se.hpp"
 
 #include <Account.h>
+#include <Account.hpp>
 #include <Split.h>
 #include <SX-book.h>
 #include <gnc-commodity.h>
@@ -53,6 +54,8 @@ static const char* DEFAULT_SERIES = "A";
 static const char* PERIOD_FISCAL_YEAR = "fiscal-year";
 static const char* PERIOD_CONTINUOUS = "continuous";
 static const char* PERIOD_ALL = "all";
+static const char* DEFERRAL_MONTH = "month";
+static const char* DEFERRAL_QUARTER = "quarter";
 
 /* ------------------------------------------------------------------ */
 /* Slot access                                                        */
@@ -116,6 +119,14 @@ struct BookEdit
 /* ------------------------------------------------------------------ */
 /* Book settings                                                      */
 
+/* Records that the book is kept in GnuCash SE. */
+static void
+mark_book (QofBook* book)
+{
+    if (get_int (inst (book), {SE, "version"}) != FORMAT_VERSION)
+        set_int (inst (book), {SE, "version"}, FORMAT_VERSION);
+}
+
 bool
 gnc_se_book_is_se (const QofBook* book)
 {
@@ -138,6 +149,24 @@ gnc_se_date_is_locked (const QofBook* book, const GDate& date)
 {
     auto lock_date {gnc_se_book_get_lock_date (book)};
     return lock_date && g_date_compare (&date, &*lock_date) <= 0;
+}
+
+gboolean
+gnc_se_book_get_lock_gdate (const QofBook* book, GDate* date)
+{
+    g_return_val_if_fail (book && date, FALSE);
+    auto lock_date {gnc_se_book_get_lock_date (book)};
+    if (!lock_date)
+        return FALSE;
+    *date = *lock_date;
+    return TRUE;
+}
+
+gboolean
+gnc_se_book_date_is_locked (const QofBook* book, const GDate* date)
+{
+    g_return_val_if_fail (book && date, FALSE);
+    return g_date_valid (date) && gnc_se_date_is_locked (book, *date);
 }
 
 /* 2001 is not a leap year: a fiscal year cannot start on 29 February. */
@@ -172,6 +201,7 @@ gnc_se_book_set_fiscal_year_start (QofBook* book, int month, int day)
     g_snprintf (text, sizeof text, "%02d-%02d", month, day);
     BookEdit edit {book};
     set_string (inst (book), {SE, "fiscal-year-start"}, text);
+    mark_book (book);
     return true;
 }
 
@@ -232,6 +262,7 @@ gnc_se_book_add_series (QofBook* book, const std::string& code,
     set_string (inst (book), {SE, "series", code, "period"},
                 period_type == GncSePeriodType::CONTINUOUS ? PERIOD_CONTINUOUS
                                                            : PERIOD_FISCAL_YEAR);
+    mark_book (book);
     return true;
 }
 
@@ -251,7 +282,27 @@ gnc_se_book_set_default_series (QofBook* book, const std::string& code)
         return false;
     BookEdit edit {book};
     set_string (inst (book), {SE, "default-series"}, code);
+    mark_book (book);
     return true;
+}
+
+GncSeDeferral
+gnc_se_book_get_deferral (const QofBook* book)
+{
+    g_return_val_if_fail (book, GncSeDeferral::MONTH);
+    return get_string (inst (book), {SE, "deferral"}) == DEFERRAL_QUARTER
+        ? GncSeDeferral::QUARTER : GncSeDeferral::MONTH;
+}
+
+void
+gnc_se_book_set_deferral (QofBook* book, GncSeDeferral deferral)
+{
+    g_return_if_fail (book);
+    BookEdit edit {book};
+    set_string (inst (book), {SE, "deferral"},
+                deferral == GncSeDeferral::QUARTER ? DEFERRAL_QUARTER
+                                                   : DEFERRAL_MONTH);
+    mark_book (book);
 }
 
 std::string
@@ -280,10 +331,34 @@ gnc_se_trans_get_number (const Transaction* trans)
     return get_int (inst (trans), {SE, "number"});
 }
 
-bool
+gboolean
 gnc_se_trans_is_locked (const Transaction* trans)
 {
     return gnc_se_trans_get_number (trans) > 0;
+}
+
+gboolean
+gnc_se_account_has_locked (const Account* account)
+{
+    g_return_val_if_fail (account, FALSE);
+    auto has_locked = [] (const Account* acc)
+    {
+        const auto& splits {xaccAccountGetSplits (acc)};
+        return std::any_of (splits.begin (), splits.end (),
+                            [] (const Split* split)
+                            {
+                                auto trans {xaccSplitGetParent (split)};
+                                return trans && gnc_se_trans_is_locked (trans);
+                            });
+    };
+    if (has_locked (account))
+        return TRUE;
+    bool found = false;
+    gnc_account_foreach_descendant (account, [&] (Account* child)
+                                    {
+                                        found = found || has_locked (child);
+                                    });
+    return found;
 }
 
 std::string
@@ -371,10 +446,19 @@ get_splits (const Transaction* trans, bool live)
 
 /* Whether the transaction is something to lock and number. */
 static bool
-is_entry (const Transaction* trans)
+is_entry (const Transaction* trans, bool live = true)
 {
     return !is_template (trans) && !xaccTransGetVoidStatus (trans) &&
-        !get_splits (trans, true).empty ();
+        !get_splits (trans, live).empty ();
+}
+
+/* Whether the transaction is an entry dated in the locked period. */
+static bool
+in_locked_period (const Transaction* trans, const GDate& lock_date, bool live)
+{
+    auto posted {xaccTransGetDatePostedGDate (trans)};
+    return g_date_valid (&posted) &&
+        g_date_compare (&posted, &lock_date) <= 0 && is_entry (trans, live);
 }
 
 /* ------------------------------------------------------------------ */
@@ -570,11 +654,22 @@ commit_guard (Transaction* trans, const Transaction* orig)
         return TRUE;
     }
 
-    /* A preliminary transaction may be deleted wherever it is dated. */
-    if (!destroying && is_entry (trans))
+    /* A preliminary transaction may be changed and deleted freely, but
+     * not moved into the locked period. A transaction that is being
+     * created is let through wherever it is dated: an edit that has
+     * never been committed cannot be rolled back to anything, and the
+     * code that creates it goes on using it. What ends up in the locked
+     * period that way is found by gnc_se_verify() and stops the next
+     * lock. The user interface refuses such dates beforehand.
+     *
+     * A transaction is being created if it had no splits when the edit
+     * began: one without splits does not survive a commit. (The
+     * instance's "infant" flag is only cleared by the SQL backend.) */
+    if (!destroying && !get_splits (orig, false).empty ())
     {
-        auto posted {xaccTransGetDatePostedGDate (trans)};
-        if (gnc_se_date_is_locked (xaccTransGetBook (trans), posted))
+        auto lock_date {gnc_se_book_get_lock_date (xaccTransGetBook (trans))};
+        if (lock_date && in_locked_period (trans, *lock_date, true) &&
+            !in_locked_period (orig, *lock_date, false))
             return reject (trans, _("The date is in a locked period."));
     }
     last_rejection.clear ();
@@ -726,27 +821,53 @@ lock_transaction (Transaction* trans, const PeriodKey& key, PeriodState& state)
     return true;
 }
 
-GncSeLockResult
-gnc_se_lock_through (QofBook* book, const GDate& date)
+/* The series as it will be when something is locked: a book without
+ * series gets the default one. */
+static std::optional<GncSeSeries>
+effective_series (const QofBook* book, const std::string& code)
 {
-    g_return_val_if_fail (book, lock_error ("No book."));
+    if (auto series {find_series (book, code)})
+        return series;
+    if (code == DEFAULT_SERIES && gnc_se_book_get_series (book).empty ())
+        return GncSeSeries {DEFAULT_SERIES, _("Vouchers"),
+                            GncSePeriodType::FISCAL_YEAR};
+    return std::nullopt;
+}
 
+static GncSeLockPlan
+plan_error (const char* format, ...) G_GNUC_PRINTF (1, 2);
+
+static GncSeLockPlan
+plan_error (const char* format, ...)
+{
+    va_list args;
+    va_start (args, format);
+    auto text {g_strdup_vprintf (format, args)};
+    va_end (args);
+    GncSeLockPlan plan {false, text, 0, {}};
+    g_free (text);
+    return plan;
+}
+
+/* Finds what locking through @a date would lock, in the order to lock
+ * it, and makes sure that all of it can be locked. Changes nothing. */
+static GncSeLockPlan
+make_plan (QofBook* book, const GDate& date,
+           std::vector<Transaction*>& to_lock, std::vector<PeriodKey>& keys)
+{
     if (!g_date_valid (&date))
-        return lock_error ("%s", _("The date is not valid."));
+        return plan_error ("%s", _("The date is not valid."));
     GDate today;
     gnc_gdate_set_today (&today);
     if (g_date_compare (&date, &today) > 0)
-        return lock_error ("%s", _("A period cannot be locked before it has "
+        return plan_error ("%s", _("A period cannot be locked before it has "
                                    "ended: the date is after today."));
     auto lock_date {gnc_se_book_get_lock_date (book)};
     if (lock_date && g_date_compare (&date, &*lock_date) <= 0)
-        return lock_error ("%s", _("The book is already locked through that "
+        return plan_error ("%s", _("The book is already locked through that "
                                    "date. The lock date can only be moved "
                                    "forward."));
 
-    /* Find what to lock and make sure that all of it can be locked
-     * before anything is changed. */
-    std::vector<Transaction*> to_lock;
     for (auto trans : all_transactions (book))
     {
         if (gnc_se_trans_is_locked (trans) || !is_entry (trans))
@@ -755,42 +876,70 @@ gnc_se_lock_through (QofBook* book, const GDate& date)
         if (g_date_compare (&posted, &date) > 0)
             continue;
         if (lock_date && g_date_compare (&posted, &*lock_date) <= 0)
-            return lock_error (_("There is a transaction that is not posted in "
-                                 "the period that is already locked: %s. It was "
-                                 "not created in GnuCash SE. Delete it and "
-                                 "enter it again in an open period."),
+            return plan_error (_("There is a preliminary transaction in the "
+                                 "period that is already locked: %s. Move it "
+                                 "to an open period or delete it."),
                                describe (trans).c_str ());
         if (!xaccTransIsBalanced (trans))
-            return lock_error (_("A transaction is not balanced: %s."),
+            return plan_error (_("A transaction is not balanced: %s."),
                                describe (trans).c_str ());
         for (auto split : get_splits (trans, true))
             if (!xaccSplitGetAccount (split))
-                return lock_error (_("A transaction has a split without an "
+                return plan_error (_("A transaction has a split without an "
                                      "account: %s."),
                                    describe (trans).c_str ());
         to_lock.push_back (trans);
     }
     std::stable_sort (to_lock.begin (), to_lock.end (), entered_before);
 
-    BookEdit edit {book};
-    if (gnc_se_book_get_series (book).empty ())
-        gnc_se_book_add_series (book, DEFAULT_SERIES, _("Vouchers"),
-                                GncSePeriodType::FISCAL_YEAR);
-
-    std::vector<PeriodKey> keys;
+    GncSeLockPlan plan {true, "", static_cast<int> (to_lock.size ()), {}};
+    std::map<PeriodKey, size_t> group_index;
     keys.reserve (to_lock.size ());
     for (auto trans : to_lock)
     {
-        auto series {find_series (book, gnc_se_trans_get_series (trans))};
+        auto series {effective_series (book, gnc_se_trans_get_series (trans))};
         if (!series)
-            return lock_error (_("A transaction is in a voucher series that "
+            return plan_error (_("A transaction is in a voucher series that "
                                  "the book does not have: %s."),
                                describe (trans).c_str ());
         keys.emplace_back (series->code,
                            gnc_se_book_get_period (
                                book, *series,
                                xaccTransGetDatePostedGDate (trans)));
+        auto [iter, inserted] = group_index.try_emplace (keys.back (),
+                                                         plan.groups.size ());
+        if (inserted)
+            plan.groups.push_back ({keys.back ().first, keys.back ().second, 0,
+                                    read_period_state (book, keys.back ()).next});
+        ++plan.groups[iter->second].count;
     }
+    return plan;
+}
+
+GncSeLockPlan
+gnc_se_plan_lock (QofBook* book, const GDate& date)
+{
+    g_return_val_if_fail (book, plan_error ("No book."));
+    std::vector<Transaction*> to_lock;
+    std::vector<PeriodKey> keys;
+    return make_plan (book, date, to_lock, keys);
+}
+
+GncSeLockResult
+gnc_se_lock_through (QofBook* book, const GDate& date)
+{
+    g_return_val_if_fail (book, lock_error ("No book."));
+
+    std::vector<Transaction*> to_lock;
+    std::vector<PeriodKey> keys;
+    auto plan {make_plan (book, date, to_lock, keys)};
+    if (!plan.ok)
+        return {false, 0, plan.error};
+
+    BookEdit edit {book};
+    if (gnc_se_book_get_series (book).empty ())
+        gnc_se_book_add_series (book, DEFAULT_SERIES, _("Vouchers"),
+                                GncSePeriodType::FISCAL_YEAR);
 
     std::map<PeriodKey, PeriodState> states;
     int locked = 0;
@@ -812,7 +961,7 @@ gnc_se_lock_through (QofBook* book, const GDate& date)
      * the series stay consistent with their transactions. */
     for (const auto& [key, state] : states)
         write_period_state (book, key, state);
-    set_int (inst (book), {SE, "version"}, FORMAT_VERSION);
+    mark_book (book);
     if (failed)
     {
         auto result {lock_error ("%s", _("A transaction could not be locked. "
@@ -823,6 +972,71 @@ gnc_se_lock_through (QofBook* book, const GDate& date)
 
     qof_instance_set_path_kvp<GDate> (inst (book), date, {SE, "lock-date"});
     return {true, locked, ""};
+}
+
+/* ------------------------------------------------------------------ */
+/* Deadlines                                                          */
+
+/* The last day on which a transaction dated @a posted may be posted. */
+static GDate
+deadline (const Transaction* trans, GDate posted, GncSeDeferral deferral)
+{
+    auto splits {get_splits (trans, true)};
+    bool cash {std::any_of (splits.begin (), splits.end (),
+                            [] (const Split* split)
+                            {
+                                auto account {xaccSplitGetAccount (split)};
+                                return account &&
+                                    xaccAccountGetType (account) == ACCT_TYPE_CASH;
+                            })};
+    GDate due {posted};
+    if (cash)
+    {
+        /* The next working day (5 kap. 2 § BFL, BFNAR 2013:2 point 3.1). */
+        do
+            g_date_add_days (&due, 1);
+        while (g_date_get_weekday (&due) == G_DATE_SATURDAY ||
+               g_date_get_weekday (&due) == G_DATE_SUNDAY);
+        return due;
+    }
+    /* 50 days after the end of the month or quarter (points 3.6, 3.7). */
+    int month = g_date_get_month (&posted);
+    if (deferral == GncSeDeferral::QUARTER)
+        month = (month - 1) / 3 * 3 + 3;
+    g_date_set_dmy (&due, 1, static_cast<GDateMonth> (month),
+                    g_date_get_year (&posted));
+    g_date_set_day (&due, g_date_get_days_in_month (g_date_get_month (&due),
+                                                    g_date_get_year (&due)));
+    g_date_add_days (&due, 50);
+    return due;
+}
+
+GncSeOverdue
+gnc_se_overdue (QofBook* book, const GDate& today)
+{
+    GncSeOverdue result {0, 0, std::nullopt};
+    g_return_val_if_fail (book && g_date_valid (&today), result);
+
+    auto deferral {gnc_se_book_get_deferral (book)};
+    for (auto trans : all_transactions (book))
+    {
+        if (gnc_se_trans_is_locked (trans) || !is_entry (trans))
+            continue;
+        auto posted {xaccTransGetDatePostedGDate (trans)};
+        if (!g_date_valid (&posted))
+            continue;
+        auto due {deadline (trans, posted, deferral)};
+        if (g_date_compare (&due, &today) >= 0)
+            continue;
+        /* A cash transaction's deadline is at most three days away. */
+        if (g_date_days_between (&posted, &due) <= 3)
+            ++result.cash;
+        else
+            ++result.other;
+        if (!result.oldest || g_date_compare (&posted, &*result.oldest) < 0)
+            result.oldest = posted;
+    }
+    return result;
 }
 
 /* ------------------------------------------------------------------ */

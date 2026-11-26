@@ -31,6 +31,10 @@
 #include <gnc-commodity.h>
 #include <gnc-date.h>
 #include <gnc-engine.h>
+#include <gncCustomer.h>
+#include <gncEntry.h>
+#include <gncInvoice.h>
+#include <gncOwner.h>
 #include <qof.h>
 #include <qofinstance-p.h>
 #include <qofsession.h>
@@ -511,16 +515,10 @@ TEST_F (SeTest, reconciling_and_notes_are_allowed_on_a_locked_transaction)
     EXPECT_TRUE (gnc_se_verify (m_book).empty ());
 }
 
-TEST_F (SeTest, nothing_new_gets_into_a_locked_period)
+TEST_F (SeTest, a_preliminary_transaction_cannot_be_moved_into_a_locked_period)
 {
     add_january ();
     ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
-
-    auto late {add (date (2025, 1, 31), 4000, "Too late", 5000, m_bank,
-                    m_sales)};
-    EXPECT_EQ (xaccTransCountSplits (late), 0);
-    EXPECT_FALSE (gnc_se_last_rejection ().empty ());
-
     auto february {add (date (2025, 2, 1), 5000, "February", 5000, m_bank,
                         m_sales)};
     EXPECT_EQ (xaccTransCountSplits (february), 2);
@@ -529,13 +527,220 @@ TEST_F (SeTest, nothing_new_gets_into_a_locked_period)
     xaccTransSetDatePostedGDate (february, date (2025, 1, 15));
     auto posted {xaccTransGetDatePostedGDate (february)};
     EXPECT_EQ (g_date_get_month (&posted), G_DATE_FEBRUARY);
+    EXPECT_FALSE (gnc_se_last_rejection ().empty ());
 
-    /* A preliminary transaction can still be changed and deleted. */
+    /* It can still be changed and deleted. */
     xaccTransSetDescription (february, "February, changed");
     EXPECT_EQ (description (february), "February, changed");
+    xaccTransSetDatePostedGDate (february, date (2025, 2, 10));
+    posted = xaccTransGetDatePostedGDate (february);
+    EXPECT_EQ (g_date_get_day (&posted), 10);
     auto guid {*xaccTransGetGUID (february)};
     xaccTransDestroy (february);
     EXPECT_EQ (xaccTransLookup (&guid, m_book), nullptr);
+}
+
+/* The code that creates a transaction goes on using it, so a new
+ * transaction is not refused. It is found afterwards instead. */
+TEST_F (SeTest, a_new_transaction_in_a_locked_period_is_found_and_stops_the_next_lock)
+{
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+
+    auto late {add (date (2025, 1, 31), 4000, "Imported too late", 5000,
+                    m_bank, m_sales)};
+    EXPECT_EQ (xaccTransCountSplits (late), 2);
+    EXPECT_FALSE (gnc_se_trans_is_locked (late));
+
+    auto issues {gnc_se_verify (m_book)};
+    ASSERT_EQ (issues.size (), 1u);
+    EXPECT_EQ (issues[0].type, GncSeIssueType::UNLOCKED_BEFORE_LOCK_DATE);
+
+    auto result {lock (date (2025, 2, 28))};
+    EXPECT_FALSE (result.ok);
+    EXPECT_NE (result.error.find ("Imported too late"), std::string::npos);
+
+    /* Moved to an open period it is an ordinary preliminary transaction. */
+    xaccTransSetDatePostedGDate (late, date (2025, 2, 1));
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+    result = lock (date (2025, 2, 28));
+    ASSERT_TRUE (result.ok) << result.error;
+    EXPECT_EQ (gnc_se_trans_get_voucher (late), "A 4");
+}
+
+TEST_F (SeTest, the_lock_date_is_a_read_only_threshold)
+{
+    EXPECT_FALSE (qof_book_uses_autoreadonly (m_book));
+    EXPECT_EQ (qof_book_get_autoreadonly_gdate (m_book), nullptr);
+
+    add_january ();
+    auto february {add (date (2025, 2, 1), 5000, "February", 5000, m_bank,
+                        m_sales)};
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+
+    /* What the register asks before it lets a date or a row be edited. */
+    EXPECT_TRUE (qof_book_uses_autoreadonly (m_book));
+    auto threshold {qof_book_get_autoreadonly_gdate (m_book)};
+    ASSERT_NE (threshold, nullptr);
+    auto first_open {date (2025, 2, 1)};
+    EXPECT_EQ (g_date_compare (threshold, &first_open), 0);
+    g_date_free (threshold);
+    EXPECT_TRUE (xaccTransIsReadonlyByPostedDate (m_first));
+    EXPECT_FALSE (xaccTransIsReadonlyByPostedDate (february));
+
+    /* A rolling threshold that is later than the lock date still applies. */
+    qof_book_begin_edit (m_book);
+    qof_instance_set (QOF_INSTANCE (m_book), "autoreadonly-days", 1.0, nullptr);
+    qof_book_commit_edit (m_book);
+    qof_book_reset_num_days_autoreadonly_cache (m_book);
+    EXPECT_TRUE (xaccTransIsReadonlyByPostedDate (february));
+}
+
+TEST_F (SeTest, an_account_with_locked_transactions_cannot_be_deleted)
+{
+    add_january ();
+    auto rent {add (date (2025, 2, 1), 5000, "Rent", 5000, m_costs, m_bank)};
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    EXPECT_TRUE (gnc_se_account_has_locked (m_sales));
+    EXPECT_TRUE (gnc_se_account_has_locked (gnc_account_get_root (m_sales)));
+    EXPECT_FALSE (gnc_se_account_has_locked (m_costs));
+
+    auto sales_guid {*xaccAccountGetGUID (m_sales)};
+    xaccAccountBeginEdit (m_sales);
+    xaccAccountDestroy (m_sales);
+    ASSERT_EQ (xaccAccountLookup (&sales_guid, m_book), m_sales);
+    EXPECT_EQ (xaccTransCountSplits (m_first), 2);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+
+    /* An account with only preliminary transactions can be. */
+    auto costs_guid {*xaccAccountGetGUID (m_costs)};
+    xaccAccountBeginEdit (m_costs);
+    xaccAccountDestroy (m_costs);
+    EXPECT_EQ (xaccAccountLookup (&costs_guid, m_book), nullptr);
+    (void) rent;
+}
+
+TEST_F (SeTest, a_locked_invoice_cannot_be_unposted)
+{
+    auto receivable {account (gnc_account_get_root (m_bank), "1510",
+                              "Kundfordringar", ACCT_TYPE_RECEIVABLE)};
+    auto customer {gncCustomerCreate (m_book)};
+    GncOwner owner;
+    gncOwnerInitCustomer (&owner, customer);
+
+    auto make_invoice = [&] (const GDate& posted) -> GncInvoice*
+    {
+        auto invoice {gncInvoiceCreate (m_book)};
+        gncInvoiceSetCurrency (invoice, m_sek);
+        gncInvoiceSetOwner (invoice, &owner);
+        auto entry {gncEntryCreate (m_book)};
+        auto when {gdate_to_time64 (posted)};
+        gncEntrySetDate (entry, when);
+        gncEntrySetDateEntered (entry, when);
+        gncEntrySetDescription (entry, "Konsulttjänster");
+        gncEntrySetDocQuantity (entry, gnc_numeric_create (1, 1), FALSE);
+        gncEntrySetInvPrice (entry, gnc_numeric_create (100000, 100));
+        gncEntrySetInvAccount (entry, m_sales);
+        gncInvoiceAddEntry (invoice, entry);
+        EXPECT_NE (gncInvoicePostToAccount (invoice, receivable, when, when,
+                                            "Faktura", TRUE, FALSE), nullptr);
+        return invoice;
+    };
+    auto january {make_invoice (date (2025, 1, 20))};
+    auto february {make_invoice (date (2025, 2, 5))};
+    ASSERT_TRUE (gncInvoiceIsPosted (january));
+    auto reason {std::string {xaccTransGetReadOnly (
+                gncInvoiceGetPostedTxn (january))}};
+
+    auto result {lock (date (2025, 1, 31))};
+    ASSERT_TRUE (result.ok) << result.error;
+    EXPECT_EQ (result.locked, 1);
+    auto posted_txn {gncInvoiceGetPostedTxn (january)};
+    EXPECT_EQ (gnc_se_trans_get_voucher (posted_txn), "A 1");
+    /* The invoice's own read-only reason is kept. */
+    EXPECT_EQ (reason, xaccTransGetReadOnly (posted_txn));
+
+    EXPECT_FALSE (gncInvoiceUnpost (january, TRUE));
+    EXPECT_TRUE (gncInvoiceIsPosted (january));
+    EXPECT_EQ (gncInvoiceGetPostedTxn (january), posted_txn);
+    EXPECT_EQ (xaccTransCountSplits (posted_txn), 2);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+
+    /* An invoice in the open period can still be unposted. */
+    EXPECT_TRUE (gncInvoiceUnpost (february, TRUE));
+    EXPECT_FALSE (gncInvoiceIsPosted (february));
+}
+
+TEST_F (SeTest, the_plan_shows_what_a_lock_would_number)
+{
+    add_january ();
+    ASSERT_TRUE (gnc_se_book_add_series (m_book, "A", "Verifikationer",
+                                         GncSePeriodType::FISCAL_YEAR));
+    ASSERT_TRUE (gnc_se_book_add_series (m_book, "L", "Löner",
+                                         GncSePeriodType::CONTINUOUS));
+    ASSERT_TRUE (gnc_se_trans_set_series (m_second, "L"));
+
+    auto plan {gnc_se_plan_lock (m_book, date (2025, 1, 15))};
+    ASSERT_TRUE (plan.ok) << plan.error;
+    EXPECT_EQ (plan.total, 2);
+    ASSERT_EQ (plan.groups.size (), 2u);
+    EXPECT_FALSE (gnc_se_trans_is_locked (m_second)); /* Nothing changed. */
+    EXPECT_FALSE (gnc_se_book_get_lock_date (m_book));
+
+    ASSERT_TRUE (lock (date (2025, 1, 15)).ok);
+    plan = gnc_se_plan_lock (m_book, date (2025, 1, 31));
+    ASSERT_TRUE (plan.ok) << plan.error;
+    ASSERT_EQ (plan.groups.size (), 1u);
+    EXPECT_EQ (plan.groups[0].series, "A");
+    EXPECT_EQ (plan.groups[0].period, "2025");
+    EXPECT_EQ (plan.groups[0].count, 1);
+    EXPECT_EQ (plan.groups[0].first_number, 2);
+
+    EXPECT_FALSE (gnc_se_plan_lock (m_book, date (2025, 1, 15)).ok);
+
+    /* A book without series gets the default one when it is locked. */
+    auto other {qof_book_new ()};
+    auto empty_plan {gnc_se_plan_lock (other, date (2025, 1, 31))};
+    EXPECT_TRUE (empty_plan.ok);
+    EXPECT_EQ (empty_plan.total, 0);
+    qof_book_destroy (other);
+}
+
+TEST_F (SeTest, overdue_transactions_are_counted)
+{
+    auto root {gnc_account_get_root (m_bank)};
+    auto cash {account (root, "1910", "Kassa", ACCT_TYPE_CASH)};
+    /* Friday 3 January 2025: due Monday 6 January. */
+    add (date (2025, 1, 3), 1000, "Cash sale", 10000, cash, m_sales);
+    /* January, not cash: due 50 days after 31 January, 22 March. */
+    add (date (2025, 1, 10), 2000, "Bank", 10000, m_bank, m_sales);
+
+    auto overdue {gnc_se_overdue (m_book, date (2025, 1, 6))};
+    EXPECT_EQ (overdue.cash, 0);
+    EXPECT_EQ (overdue.other, 0);
+    EXPECT_FALSE (overdue.oldest);
+
+    overdue = gnc_se_overdue (m_book, date (2025, 1, 7));
+    EXPECT_EQ (overdue.cash, 1);
+    EXPECT_EQ (overdue.other, 0);
+    ASSERT_TRUE (overdue.oldest);
+    EXPECT_EQ (g_date_get_day (&*overdue.oldest), 3);
+
+    EXPECT_EQ (gnc_se_overdue (m_book, date (2025, 3, 22)).other, 0);
+    EXPECT_EQ (gnc_se_overdue (m_book, date (2025, 3, 23)).other, 1);
+
+    /* Per quarter: due 50 days after 31 March, 20 May. */
+    EXPECT_EQ (gnc_se_book_get_deferral (m_book), GncSeDeferral::MONTH);
+    gnc_se_book_set_deferral (m_book, GncSeDeferral::QUARTER);
+    EXPECT_EQ (gnc_se_book_get_deferral (m_book), GncSeDeferral::QUARTER);
+    EXPECT_TRUE (gnc_se_book_is_se (m_book));
+    EXPECT_EQ (gnc_se_overdue (m_book, date (2025, 5, 20)).other, 0);
+    EXPECT_EQ (gnc_se_overdue (m_book, date (2025, 5, 21)).other, 1);
+
+    /* What is posted is not overdue. */
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    overdue = gnc_se_overdue (m_book, date (2025, 12, 31));
+    EXPECT_EQ (overdue.cash + overdue.other, 0);
 }
 
 TEST_F (SeTest, a_number_cannot_be_set_from_outside)
@@ -660,6 +865,7 @@ TEST_F (SeVerifyTest, a_new_transaction_in_the_locked_period_is_found)
 
     /* GnuCash SE does not take it in: the next lock is refused... */
     gnc_se_init ();
+    EXPECT_FALSE (gnc_se_plan_lock (m_book, date (2025, 2, 28)).ok);
     auto result {lock (date (2025, 2, 28))};
     EXPECT_FALSE (result.ok);
     EXPECT_NE (result.error.find ("Added in plain GnuCash"), std::string::npos);

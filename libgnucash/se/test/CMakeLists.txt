@@ -6,7 +6,6 @@ set(gtest_se_INCLUDES
 )
 
 set(gtest_se_LIBS
-  gnc-se
   gnc-engine
   PkgConfig::GLIB2
   gtest)

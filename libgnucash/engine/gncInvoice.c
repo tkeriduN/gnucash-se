@@ -42,6 +42,7 @@
 #include "gncInvoiceP.h"
 #include "gncOwnerP.h"
 #include "engine-helpers.h"
+#include "gnc-se.h" /* GnuCash SE */
 
 struct _gncInvoice
 {
@@ -1774,6 +1775,19 @@ gncInvoiceUnpost (GncInvoice *invoice, gboolean reset_tax_tables)
 
     lot = gncInvoiceGetPostedLot (invoice);
     g_return_val_if_fail (lot, FALSE);
+
+    /* GnuCash SE: unposting deletes the posted transaction and the
+     * transactions that link the lot to payments. If any of them is
+     * locked the invoice stays posted. */
+    if (gnc_se_trans_is_locked (txn))
+        return FALSE;
+    for (GList *node = gnc_lot_get_split_list (lot); node; node = node->next)
+    {
+        Transaction *link_txn = xaccSplitGetParent (node->data);
+        if (link_txn && xaccTransGetTxnType (link_txn) == TXN_TYPE_LINK &&
+            gnc_se_trans_is_locked (link_txn))
+            return FALSE;
+    }
 
     ENTER ("");
     /* Destroy the Posted Transaction */

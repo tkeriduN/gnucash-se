@@ -56,6 +56,7 @@
 #include "AccountP.hpp"
 
 #include "qofbook.hpp"
+#include "gnc-se.h" /* GnuCash SE */
 
 static QofLogModule log_module = QOF_MOD_ENGINE;
 
@@ -971,6 +972,10 @@ qof_book_option_num_field_source_changed_cb (GObject *gobject,
 gboolean qof_book_uses_autoreadonly (const QofBook *book)
 {
     g_assert(book);
+    /* GnuCash SE: a lock date is a read-only threshold too. */
+    GDate lock_date;
+    if (gnc_se_book_get_lock_gdate (book, &lock_date))
+        return TRUE;
     return (qof_book_get_num_days_autoreadonly(book) != 0);
 }
 
@@ -1011,6 +1016,18 @@ GDate* qof_book_get_autoreadonly_gdate (const QofBook *book)
     {
         result = gnc_g_date_new_today();
         g_date_subtract_days(result, num_days);
+    }
+
+    /* GnuCash SE: the first open day is the day after the lock date.
+     * The later of the two thresholds applies. */
+    GDate first_open;
+    if (gnc_se_book_get_lock_gdate (book, &first_open))
+    {
+        g_date_add_days (&first_open, 1);
+        if (!result)
+            result = g_date_copy (&first_open);
+        else if (g_date_compare (result, &first_open) < 0)
+            *result = first_open;
     }
     return result;
 }

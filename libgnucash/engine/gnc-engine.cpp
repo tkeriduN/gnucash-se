@@ -29,6 +29,7 @@
 #include "gnc-budget.h"
 #include "TransactionP.hpp"
 #include "gnc-commodity.h"
+#include "gnc-se.h" /* GnuCash SE */
 #include "gnc-pricedb-p.h"
 
 /** gnc file backend library name */
@@ -58,6 +59,9 @@ gnc_engine_init_part1()
 
     /* Now register our core types */
     cashobjects_register();
+
+    /* GnuCash SE: from here on locked transactions cannot be changed. */
+    gnc_se_init ();
 }
 
 static void

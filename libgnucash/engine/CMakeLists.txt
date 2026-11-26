@@ -219,8 +219,19 @@ set_source_files_properties (${engine_SOURCES} PROPERTIES OBJECT_DEPENDS ${CONFI
 # Add dependency on iso-4217-currencies.c
 set_source_files_properties (gnc-commodity.c PROPERTIES OBJECT_DEPENDS "${ISO_4217_C};${CONFIG_H}")
 
+# GnuCash SE: the lock date and voucher numbering are part of the engine,
+# so that the locks hold for every program that uses it. The sources live
+# in libgnucash/se and are distributed from there.
+set (engine_se_SOURCES
+  ${CMAKE_SOURCE_DIR}/libgnucash/se/gnc-se.cpp
+  ${CMAKE_SOURCE_DIR}/libgnucash/se/gnc-se.h
+  ${CMAKE_SOURCE_DIR}/libgnucash/se/gnc-se.hpp
+)
+set_source_files_properties (${engine_se_SOURCES} PROPERTIES OBJECT_DEPENDS ${CONFIG_H})
+
 add_library (gnc-engine
   ${engine_SOURCES}
+  ${engine_se_SOURCES}
   ${engine_HEADERS}
   ${engine_noinst_HEADERS}
 )
@@ -251,6 +262,7 @@ target_include_directories (gnc-engine
         ${CMAKE_CURRENT_BINARY_DIR} # for iso-4217-currencies.c
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/libgnucash/se # GnuCash SE
         ${CMAKE_BINARY_DIR}/common # for config.h
         ${CMAKE_SOURCE_DIR}/common # for platform.h
         ${LIBINTL_INCLUDE_PATH}
