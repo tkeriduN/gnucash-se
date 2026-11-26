@@ -986,6 +986,200 @@ TEST_F (SeCorrectionTest, a_correcting_entry_without_its_original_is_found)
 }
 
 /* ------------------------------------------------------------------ */
+/* Fiscal years                                                       */
+
+static bool
+same_day (const GDate& a, const GDate& b)
+{
+    return g_date_compare (&a, &b) == 0;
+}
+
+TEST_F (SeTest, fiscal_years_are_worked_out_until_the_book_has_its_own)
+{
+    EXPECT_TRUE (gnc_se_book_get_fiscal_years (m_book).empty ());
+    auto year {gnc_se_book_get_fiscal_year (m_book, date (2025, 6, 30))};
+    EXPECT_EQ (year.key, "2025");
+    EXPECT_TRUE (same_day (year.start, date (2025, 1, 1)));
+    EXPECT_TRUE (same_day (year.end, date (2025, 12, 31)));
+    EXPECT_FALSE (year.stored);
+    EXPECT_FALSE (year.closed);
+
+    ASSERT_TRUE (gnc_se_book_set_fiscal_year_start (m_book, 7, 1));
+    year = gnc_se_book_get_fiscal_year (m_book, date (2025, 6, 30));
+    EXPECT_EQ (year.key, "2024");
+    EXPECT_TRUE (same_day (year.start, date (2024, 7, 1)));
+    EXPECT_TRUE (same_day (year.end, date (2025, 6, 30)));
+    EXPECT_TRUE (gnc_se_book_get_fiscal_years (m_book).empty ());
+
+    /* Locking gives the book the years of what is locked. */
+    add (date (2024, 12, 30), 1000, "December", 10000, m_bank, m_sales);
+    ASSERT_TRUE (lock (date (2025, 8, 31)).ok);
+    auto years {gnc_se_book_get_fiscal_years (m_book)};
+    ASSERT_EQ (years.size (), 2u);
+    EXPECT_EQ (years[0].key, "2024");
+    EXPECT_TRUE (years[0].stored);
+    EXPECT_EQ (years[1].key, "2025");
+    EXPECT_TRUE (same_day (years[1].start, date (2025, 7, 1)));
+    EXPECT_TRUE (same_day (years[1].end, date (2026, 6, 30)));
+    EXPECT_FALSE (gnc_se_book_set_fiscal_year_start (m_book, 1, 1));
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeTest, a_first_fiscal_year_can_be_extended)
+{
+    /* A company started 15 November 2024 with its first year to the end
+     * of 2025. */
+    auto too_long {gnc_se_book_define_fiscal_year (m_book, date (2024, 1, 1),
+                                                   date (2025, 7, 1))};
+    EXPECT_FALSE (too_long.ok);
+    EXPECT_FALSE (too_long.error.empty ());
+    EXPECT_FALSE (gnc_se_book_define_fiscal_year (m_book, date (2025, 1, 1),
+                                                  date (2024, 12, 31)).ok);
+    ASSERT_TRUE (gnc_se_book_define_fiscal_year (m_book, date (2024, 11, 15),
+                                                 date (2025, 12, 31)).ok);
+    EXPECT_TRUE (gnc_se_book_is_se (m_book));
+
+    auto december {add (date (2024, 12, 30), 1000, "December", 10000, m_bank,
+                        m_sales)};
+    auto january {add (date (2025, 1, 2), 2000, "January", 10000, m_bank,
+                       m_sales)};
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    EXPECT_EQ (gnc_se_trans_get_period (december), "2024");
+    EXPECT_EQ (gnc_se_trans_get_voucher (december), "A 1");
+    EXPECT_EQ (gnc_se_trans_get_period (january), "2024");
+    EXPECT_EQ (gnc_se_trans_get_voucher (january), "A 2");
+
+    /* The year after it follows by itself. */
+    auto next {gnc_se_book_get_fiscal_year (m_book, date (2026, 2, 1))};
+    EXPECT_EQ (next.key, "2026");
+    EXPECT_TRUE (same_day (next.start, date (2026, 1, 1)));
+    EXPECT_TRUE (same_day (next.end, date (2026, 12, 31)));
+    EXPECT_FALSE (next.stored);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeTest, a_shortened_year_gives_two_years_in_one_calendar_year)
+{
+    /* Exactly 18 months is allowed; the year is then shortened. */
+    ASSERT_TRUE (gnc_se_book_define_fiscal_year (m_book, date (2025, 1, 1),
+                                                 date (2026, 6, 30)).ok);
+    ASSERT_TRUE (gnc_se_book_define_fiscal_year (m_book, date (2025, 1, 1),
+                                                 date (2025, 6, 30)).ok);
+    ASSERT_EQ (gnc_se_book_get_fiscal_years (m_book).size (), 1u);
+
+    auto spring {add (date (2025, 3, 1), 1000, "Spring", 10000, m_bank,
+                      m_sales)};
+    auto autumn {add (date (2025, 8, 1), 2000, "Autumn", 10000, m_bank,
+                      m_sales)};
+    ASSERT_TRUE (lock (date (2025, 8, 31)).ok);
+
+    EXPECT_EQ (gnc_se_trans_get_period (spring), "2025");
+    EXPECT_EQ (gnc_se_trans_get_number (spring), 1);
+    EXPECT_EQ (gnc_se_trans_get_period (autumn), "2025-07-01");
+    EXPECT_EQ (gnc_se_trans_get_number (autumn), 1);
+    auto years {gnc_se_book_get_fiscal_years (m_book)};
+    ASSERT_EQ (years.size (), 2u);
+    EXPECT_TRUE (same_day (years[1].start, date (2025, 7, 1)));
+    EXPECT_TRUE (same_day (years[1].end, date (2026, 6, 30)));
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeTest, the_last_day_of_the_latest_year_can_be_moved)
+{
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+
+    /* Not to before what is already posted. */
+    EXPECT_FALSE (gnc_se_book_define_fiscal_year (m_book, date (2025, 1, 1),
+                                                  date (2025, 1, 15)).ok);
+    ASSERT_TRUE (gnc_se_book_define_fiscal_year (m_book, date (2025, 1, 1),
+                                                 date (2025, 8, 31)).ok);
+    auto years {gnc_se_book_get_fiscal_years (m_book)};
+    ASSERT_EQ (years.size (), 1u);
+    EXPECT_TRUE (same_day (years[0].end, date (2025, 8, 31)));
+
+    /* A new year starts the day after the latest one ends. */
+    auto gap {gnc_se_book_define_fiscal_year (m_book, date (2025, 10, 1),
+                                              date (2026, 9, 30))};
+    EXPECT_FALSE (gap.ok);
+    EXPECT_FALSE (gap.error.empty ());
+    ASSERT_TRUE (gnc_se_book_define_fiscal_year (m_book, date (2025, 9, 1),
+                                                 date (2026, 8, 31)).ok);
+    years = gnc_se_book_get_fiscal_years (m_book);
+    ASSERT_EQ (years.size (), 2u);
+    EXPECT_EQ (years[1].key, "2025-09-01");
+    EXPECT_EQ (gnc_se_book_get_fiscal_year (m_book, date (2025, 9, 10)).key,
+               "2025-09-01");
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeTest, closing_a_fiscal_year_locks_it)
+{
+    add_january ();
+    EXPECT_FALSE (gnc_se_close_fiscal_year (m_book, date (2025, 3, 1), " ").ok);
+
+    auto result {gnc_se_close_fiscal_year (m_book, date (2025, 3, 1), "IA")};
+    ASSERT_TRUE (result.ok) << result.error;
+    EXPECT_EQ (result.locked, 3);
+    EXPECT_TRUE (gnc_se_date_is_locked (m_book, date (2025, 12, 31)));
+    EXPECT_FALSE (gnc_se_date_is_locked (m_book, date (2026, 1, 1)));
+
+    auto year {gnc_se_book_get_fiscal_year (m_book, date (2025, 6, 1))};
+    EXPECT_TRUE (year.closed);
+    EXPECT_GT (year.closed_at, 0);
+    EXPECT_EQ (year.closed_by, "IA");
+
+    auto history {gnc_se_book_get_history (m_book)};
+    EXPECT_EQ (history.back ().type, "fiscal-year");
+    EXPECT_EQ (history.back ().signature, "IA");
+
+    /* A closed year stays as it is. */
+    EXPECT_FALSE (gnc_se_close_fiscal_year (m_book, date (2025, 3, 1), "IA").ok);
+    EXPECT_FALSE (gnc_se_book_define_fiscal_year (m_book, date (2025, 1, 1),
+                                                  date (2026, 3, 31)).ok);
+
+    /* A year that has not ended cannot be closed. */
+    GDate today;
+    gnc_gdate_set_today (&today);
+    EXPECT_FALSE (gnc_se_close_fiscal_year (m_book, today, "IA").ok);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeTest, fiscal_years_are_closed_in_order)
+{
+    add (date (2023, 12, 30), 1000, "2023", 10000, m_bank, m_sales);
+    add (date (2024, 6, 1), 2000, "2024", 10000, m_bank, m_sales);
+    ASSERT_TRUE (lock (date (2024, 6, 30)).ok);
+
+    auto result {gnc_se_close_fiscal_year (m_book, date (2024, 6, 1), "IA")};
+    EXPECT_FALSE (result.ok);
+    EXPECT_NE (result.error.find ("2023"), std::string::npos) << result.error;
+
+    /* 2023 is already posted through its last day: closing it only
+     * marks it. */
+    result = gnc_se_close_fiscal_year (m_book, date (2023, 12, 30), "IA");
+    ASSERT_TRUE (result.ok) << result.error;
+    EXPECT_EQ (result.locked, 0);
+    EXPECT_TRUE (gnc_se_close_fiscal_year (m_book, date (2024, 6, 1), "IA").ok);
+    EXPECT_TRUE (gnc_se_date_is_locked (m_book, date (2024, 12, 31)));
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_F (SeTest, a_transaction_numbered_in_the_wrong_year_is_found)
+{
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    ASSERT_TRUE (gnc_se_verify (m_book).empty ());
+
+    /* The year is cut short behind the back of GnuCash SE. */
+    qof_instance_set_path_kvp<GDate> (QOF_INSTANCE (m_book), date (2025, 1, 12),
+                                      {"se", "fiscal-years", "2025", "end"});
+    auto types {issue_types ()};
+    EXPECT_EQ (std::count (types.begin (), types.end (),
+                           GncSeIssueType::PERIOD_MISMATCH), 2);
+}
+
+/* ------------------------------------------------------------------ */
 /* The processing history                                             */
 
 class SeHistoryTest : public SeTest
@@ -1018,7 +1212,7 @@ TEST_F (SeTest, the_history_starts_when_the_book_is_first_kept_in_se)
 
     ASSERT_TRUE (gnc_se_lock_through (m_book, date (2025, 1, 31), " IA ").ok);
     auto history {gnc_se_book_get_history (m_book)};
-    ASSERT_EQ (history.size (), 3u);
+    ASSERT_EQ (history.size (), 4u);
 
     EXPECT_EQ (history[0].number, 1);
     EXPECT_EQ (history[0].type, "start");
@@ -1026,15 +1220,17 @@ TEST_F (SeTest, the_history_starts_when_the_book_is_first_kept_in_se)
         << history[0].text;
     EXPECT_EQ (history[1].type, "settings"); /* Series A was added. */
     EXPECT_NE (history[1].text.find ("A"), std::string::npos);
+    EXPECT_EQ (history[2].type, "fiscal-year"); /* 2025 was set up. */
+    EXPECT_NE (history[2].text.find ("2025"), std::string::npos);
 
-    EXPECT_EQ (history[2].number, 3);
-    EXPECT_EQ (history[2].type, "lock");
-    EXPECT_EQ (history[2].signature, "IA");
-    EXPECT_GT (history[2].time, 0);
-    EXPECT_NE (history[2].text.find ("A 2025: 1-3"), std::string::npos)
-        << history[2].text;
+    EXPECT_EQ (history[3].number, 4);
+    EXPECT_EQ (history[3].type, "lock");
+    EXPECT_EQ (history[3].signature, "IA");
+    EXPECT_GT (history[3].time, 0);
+    EXPECT_NE (history[3].text.find ("A 2025: 1-3"), std::string::npos)
+        << history[3].text;
     /* The hash of the last voucher ties the series to the history. */
-    EXPECT_NE (history[2].text.find (slot (m_third, "hash").substr (0, 16)),
+    EXPECT_NE (history[3].text.find (slot (m_third, "hash").substr (0, 16)),
                std::string::npos);
 
     EXPECT_TRUE (gnc_se_verify (m_book).empty ());
@@ -1042,8 +1238,10 @@ TEST_F (SeTest, the_history_starts_when_the_book_is_first_kept_in_se)
 
 TEST_F (SeHistoryTest, settings_are_recorded_when_they_change)
 {
-    ASSERT_TRUE (gnc_se_book_set_fiscal_year_start (m_book, 7, 1));
-    ASSERT_TRUE (gnc_se_book_set_fiscal_year_start (m_book, 7, 1)); /* Same. */
+    /* The book has fiscal years now: the first day is no longer a setting. */
+    EXPECT_FALSE (gnc_se_book_set_fiscal_year_start (m_book, 7, 1));
+    ASSERT_TRUE (gnc_se_book_define_fiscal_year (m_book, date (2025, 1, 1),
+                                                 date (2026, 3, 31)).ok);
     gnc_se_book_set_deferral (m_book, GncSeDeferral::QUARTER);
     gnc_se_book_set_deferral (m_book, GncSeDeferral::QUARTER);
     ASSERT_TRUE (gnc_se_book_add_series (m_book, "L", "Löner",
@@ -1053,10 +1251,10 @@ TEST_F (SeHistoryTest, settings_are_recorded_when_they_change)
 
     auto events {recorded ()};
     ASSERT_EQ (events.size (), 4u);
-    for (const auto& event : events)
-        EXPECT_EQ (event.type, "settings");
-    EXPECT_NE (events[0].text.find ("07-01"), std::string::npos);
-    EXPECT_NE (events[0].text.find ("01-01"), std::string::npos);
+    EXPECT_EQ (events[0].type, "fiscal-year");
+    EXPECT_NE (events[0].text.find ("2025"), std::string::npos);
+    for (size_t i = 1; i < events.size (); ++i)
+        EXPECT_EQ (events[i].type, "settings");
     EXPECT_NE (events[1].text.find ("quarter"), std::string::npos);
     EXPECT_NE (events[2].text.find ("Löner"), std::string::npos);
     EXPECT_NE (events[3].text.find ("L"), std::string::npos);
@@ -1502,6 +1700,14 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
     EXPECT_EQ (gnc_se_book_get_history (m_book).back ().signature, "IA");
     gnc_se_history_sync (m_book); /* The same program, the same accounts. */
     EXPECT_EQ (gnc_se_book_get_history (m_book).size (), history_size);
+
+    auto years {gnc_se_book_get_fiscal_years (m_book)};
+    ASSERT_EQ (years.size (), 1u);
+    EXPECT_EQ (years[0].key, "2024");
+    auto first_day {date (2024, 7, 1)};
+    auto last_day {date (2025, 6, 30)};
+    EXPECT_EQ (g_date_compare (&years[0].start, &first_day), 0);
+    EXPECT_EQ (g_date_compare (&years[0].end, &last_day), 0);
 
     EXPECT_TRUE (gnc_se_book_is_se (m_book));
     EXPECT_TRUE (gnc_se_date_is_locked (m_book, date (2025, 1, 31)));

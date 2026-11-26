@@ -32741,3 +32741,111 @@ msgstr "Visa vad som har gjorts med boken: bokförda perioder, rättelser, ändr
 
 msgid "_Save As…"
 msgstr "Spara _som…"
+
+#, c-format
+msgid "Fiscal year %s was set up: %s to %s."
+msgstr "Räkenskapsår %s lades upp: %s till %s."
+
+msgid "A fiscal year is at most 18 months, and ends after it starts."
+msgstr "Ett räkenskapsår är högst 18 månader, och slutar efter att det börjar."
+
+msgid "The fiscal year is closed and cannot be changed."
+msgstr "Räkenskapsåret är avslutat och kan inte ändras."
+
+msgid "The book is already posted past that day. The fiscal year cannot end before the lock date."
+msgstr "Boken är redan bokförd förbi den dagen. Räkenskapsåret kan inte sluta före låsdatumet."
+
+#, c-format
+msgid "The last day of fiscal year %s was moved from %s to %s."
+msgstr "Sista dagen i räkenskapsår %s flyttades från %s till %s."
+
+#, c-format
+msgid "Fiscal years follow each other. The next one starts on %s."
+msgstr "Räkenskapsåren följer på varandra. Nästa börjar den %s."
+
+msgid "Closing a fiscal year takes a signature."
+msgstr "Att avsluta ett räkenskapsår kräver en signatur."
+
+#, c-format
+msgid "Fiscal year %s is already closed."
+msgstr "Räkenskapsår %s är redan avslutat."
+
+#, c-format
+msgid "Fiscal year %s has not ended yet."
+msgstr "Räkenskapsår %s är inte slut än."
+
+#, c-format
+msgid "Fiscal year %s is still open. Close it first."
+msgstr "Räkenskapsår %s är fortfarande öppet. Avsluta det först."
+
+#, c-format
+msgid "Fiscal year %s, %s to %s, was closed."
+msgstr "Räkenskapsår %s, %s till %s, avslutades."
+
+msgid "Fiscal years: key, first day, last day, closed"
+msgstr "Räkenskapsår: nyckel, första dag, sista dag, avslutat"
+
+#, c-format
+msgid "%s (%s) is numbered in another fiscal year than the one its date lies in."
+msgstr "%s (%s) är numrerad i ett annat räkenskapsår än det som datumet ligger i."
+
+#, c-format
+msgid "%s: %s to %s"
+msgstr "%s: %s till %s"
+
+#, c-format
+msgid ", closed by %s"
+msgstr ", avslutat av %s"
+
+msgid "None yet. Twelve-month years from the day above are set up when something is posted. Define the first year here if it is shorter or longer."
+msgstr "Inga än. Tolvmånadersår från dagen ovan läggs upp när något bokförs. Ange det första året här om det är kortare eller längre."
+
+msgid "Define or Change a Fiscal Year"
+msgstr "Ange eller ändra ett räkenskapsår"
+
+msgid "Enter the first and the last day of the book's first fiscal year. A fiscal year is at most 18 months."
+msgstr "Ange första och sista dagen i bokens första räkenskapsår. Ett räkenskapsår är högst 18 månader."
+
+msgid "To move the last day of the latest fiscal year, keep its first day and change the last. To add the next year, enter the day after the latest year ends as the first day. A fiscal year is at most 18 months."
+msgstr "För att flytta sista dagen i det senaste räkenskapsåret: behåll första dagen och ändra den sista. För att lägga till nästa år: ange dagen efter att det senaste året slutar som första dag. Ett räkenskapsår är högst 18 månader."
+
+msgid "First day:"
+msgstr "Första dag:"
+
+msgid "Last day:"
+msgstr "Sista dag:"
+
+msgid "_Define or Change a Fiscal Year…"
+msgstr "_Ange eller ändra ett räkenskapsår…"
+
+msgid "Fiscal years:"
+msgstr "Räkenskapsår:"
+
+msgid "The fiscal year has not ended yet, so it cannot be closed."
+msgstr "Räkenskapsåret är inte slut än och kan därför inte avslutas."
+
+msgid "The year is already posted through its last day."
+msgstr "Året är redan bokfört till och med sin sista dag."
+
+msgid "Close Fiscal Year"
+msgstr "Avsluta räkenskapsår"
+
+msgid "Close the _Year"
+msgstr "Avsluta _året"
+
+#, c-format
+msgid "Fiscal year %s, %s to %s. Closing it posts everything up to its last day and marks the year closed. Make the closing entries first: a closed year cannot be changed, and what is posted can only be corrected with correcting entries."
+msgstr "Räkenskapsår %s, %s till %s. När det avslutas bokförs allt till och med dess sista dag och året markeras som avslutat. Gör bokslutsposterna först: ett avslutat år kan inte ändras, och det som är bokfört kan bara rättas med rättelseverifikationer."
+
+#, c-format
+msgid "Fiscal year %s is closed."
+msgstr "Räkenskapsår %s är avslutat."
+
+msgid "Close _Fiscal Year…"
+msgstr "Avsluta _räkenskapsår…"
+
+msgid "Post everything up to the last day of the fiscal year and mark the year closed"
+msgstr "Bokför allt till och med räkenskapsårets sista dag och markera året som avslutat"
+
+msgid "Set the fiscal years, the voucher series and how long posting may be put off"
+msgstr "Ange räkenskapsåren, verifikationsserierna och hur länge bokföringen får senareläggas"

@@ -46,7 +46,7 @@ Tidigare beslut som också gäller forken:
 | **1 Lås och numrering** (byggt 2026-11-26, se designskissens avsnitt 10) | Periodlåsning med ett låsdatum per bok som bara kan flyttas framåt. Verifikationsserier, standard en per räkenskapsår. Nummer tilldelas vid låsning i registreringsordning. Spärr mot ändring och radering av låsta transaktioner. Kontroll att serien är obruten. Upptäckt av ändringar gjorda utanför SE. Design: [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md) | BFNAR 2.1, 5.9–5.10 |
 | **2 Rättelse** (byggt 2026-11-26, [`design/02-rattelse.md`](design/02-rattelse.md)) | Rättelseverifikation från en låst post, med hänvisning åt båda håll och vem/när | 5:5, 5:9 BFL, BFNAR 2.17–2.18, 5.15–5.16 |
 | **3 Behandlingshistorik** (byggt 2026-11-26, [`design/03-behandlingshistorik.md`](design/03-behandlingshistorik.md)) | Logg över låsningar, rättelser och systemändringar (konton, momstabeller, inställningar, programversion) som följer med boken, och uppställning av varje bokförd post med registrerings- och bokföringstid. **Systemdokumentation (BFNAR 9.2) ingår inte**: struken av Isak 2026-11-26 i väntan på ombyggnaden till serverläge | 5:11 BFL, BFNAR 9.16 |
-| **4 Räkenskapsår** | Räkenskapsår per bok, även brutet och förlängt; serier per år | 3 kap. BFL |
+| **4 Räkenskapsår** (byggt 2026-11-26, [`design/04-rakenskapsar.md`](design/04-rakenskapsar.md)) | Räkenskapsår per bok, även brutet, förkortat och förlängt; serier per år; avsluta räkenskapsår | 3 kap. BFL |
 | **5 Rapportering** | SRU-filer (INK2R/INK2S, NE), momsdeklaration som eSKD-XML, BAS-årgångsbyte med uttrycklig mappning och bekräftade matchningar | – |
 | **6 Senare** | iXBRL för K2-årsredovisning, ev. API-brygga (kräver avtalspart), Server Edition | – |
 

@@ -12,6 +12,11 @@
           <attribute name="tooltip" translatable="yes">Post the preliminary transactions up to a date: number them and lock them</attribute>
         </item>
         <item>
+          <attribute name="label" translatable="yes">Close _Fiscal Year…</attribute>
+          <attribute name="action">gnc-plugin-se-actions.SeCloseYearAction</attribute>
+          <attribute name="tooltip" translatable="yes">Post everything up to the last day of the fiscal year and mark the year closed</attribute>
+        </item>
+        <item>
           <attribute name="label" translatable="yes">_Check Voucher Series</attribute>
           <attribute name="action">gnc-plugin-se-actions.SeVerifyAction</attribute>
           <attribute name="tooltip" translatable="yes">Check that the voucher series are unbroken and that no posted transaction has been changed</attribute>
@@ -24,7 +29,7 @@
         <item>
           <attribute name="label" translatable="yes">Voucher _Series and Fiscal Year…</attribute>
           <attribute name="action">gnc-plugin-se-actions.SeSettingsAction</attribute>
-          <attribute name="tooltip" translatable="yes">Set the start of the fiscal year, the voucher series and how long posting may be put off</attribute>
+          <attribute name="tooltip" translatable="yes">Set the fiscal years, the voucher series and how long posting may be put off</attribute>
         </item>
       </section>
     </submenu>

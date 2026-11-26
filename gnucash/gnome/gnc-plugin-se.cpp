@@ -53,6 +53,9 @@ static void gnc_plugin_se_cmd_settings (GSimpleAction* simple,
                                         gpointer user_data);
 static void gnc_plugin_se_cmd_history (GSimpleAction* simple,
                                        GVariant* parameter, gpointer user_data);
+static void gnc_plugin_se_cmd_close_year (GSimpleAction* simple,
+                                          GVariant* parameter,
+                                          gpointer user_data);
 
 static GActionEntry gnc_plugin_actions [] =
 {
@@ -61,6 +64,7 @@ static GActionEntry gnc_plugin_actions [] =
     { "SeVerifyAction", gnc_plugin_se_cmd_verify, nullptr, nullptr, nullptr },
     { "SeSettingsAction", gnc_plugin_se_cmd_settings, nullptr, nullptr, nullptr },
     { "SeHistoryAction", gnc_plugin_se_cmd_history, nullptr, nullptr, nullptr },
+    { "SeCloseYearAction", gnc_plugin_se_cmd_close_year, nullptr, nullptr, nullptr },
 };
 static guint gnc_plugin_n_actions = G_N_ELEMENTS (gnc_plugin_actions);
 
@@ -74,6 +78,7 @@ static const gchar* gnc_plugin_load_ui_items [] =
 static const gchar* plugin_writeable_actions[] =
 {
     "SeLockAction",
+    "SeCloseYearAction",
     "SeSettingsAction",
     nullptr
 };
@@ -173,6 +178,10 @@ issue_text (const QofBook* book, const GncSeIssue& issue)
         return format (_("A preliminary transaction is dated in the locked "
                          "period: %s. Move it to an open period or delete it."),
                        trans.c_str ());
+    case GncSeIssueType::PERIOD_MISMATCH:
+        return format (_("%s (%s) is numbered in another fiscal year than the "
+                         "one its date lies in."),
+                       voucher.c_str (), trans.c_str ());
     case GncSeIssueType::HISTORY_CHANGED:
         return format (_("The processing history has been changed: entry %d "
                          "is missing or altered."), first);
@@ -275,10 +284,10 @@ lock_dialog_date (LockDialog* data)
     return date;
 }
 
-static void
-lock_dialog_update (LockDialog* data)
+/* What a lock would do, or why it cannot be done. */
+static std::string
+plan_text (const GncSeLockPlan& plan)
 {
-    auto plan {gnc_se_plan_lock (data->book, lock_dialog_date (data))};
     std::string text;
     if (!plan.ok)
         text = plan.error;
@@ -310,6 +319,14 @@ lock_dialog_update (LockDialog* data)
                                 group.series.c_str (), last);
         }
     }
+    return text;
+}
+
+static void
+lock_dialog_update (LockDialog* data)
+{
+    auto plan {gnc_se_plan_lock (data->book, lock_dialog_date (data))};
+    auto text {plan_text (plan)};
     /* Who posts is recorded in the processing history. */
     bool signed_by {!is_blank (gtk_entry_get_text (GTK_ENTRY (data->signature)))};
     if (plan.ok && !signed_by)
@@ -616,10 +633,16 @@ gnc_plugin_se_correct_transaction (GtkWindow* parent, Transaction* trans)
 /* ------------------------------------------------------------------ */
 /* Voucher Series and Fiscal Year…                                    */
 
+struct SettingsDialog;
+static void settings_dialog_show_years (SettingsDialog* data);
+static void settings_dialog_year_cb (GtkWidget* button, gpointer user_data);
+
 struct SettingsDialog
 {
     QofBook* book;
     GtkWidget* dialog;
+    GtkWidget* start_box;
+    GtkWidget* years_list;
     GtkWidget* series_list;
     GtkWidget* default_series;
     GtkWidget* new_code;
@@ -696,11 +719,114 @@ grid_label (const char* text)
     return label;
 }
 
+static std::string
+year_text (const GncSeFiscalYear& year)
+{
+    /* Translators: the key of a fiscal year, its first and its last day. */
+    auto text {format (_("%s: %s to %s"), year.key.c_str (),
+                       date_text (year.start).c_str (),
+                       date_text (year.end).c_str ())};
+    if (year.closed)
+        /* Translators: the signature of who closed the fiscal year. */
+        text += format (_(", closed by %s"), year.closed_by.c_str ());
+    return text;
+}
+
+static void
+settings_dialog_show_years (SettingsDialog* data)
+{
+    auto years {gnc_se_book_get_fiscal_years (data->book)};
+    std::string text;
+    for (const auto& year : years)
+        text += (text.empty () ? "" : "\n") + year_text (year);
+    if (years.empty ())
+        text = _("None yet. Twelve-month years from the day above are set up "
+                 "when something is posted. Define the first year here if it "
+                 "is shorter or longer.");
+    gtk_label_set_text (GTK_LABEL (data->years_list), text.c_str ());
+    gtk_label_set_line_wrap (GTK_LABEL (data->years_list), TRUE);
+    gtk_label_set_max_width_chars (GTK_LABEL (data->years_list), 60);
+    /* Once the book has years they follow each other. */
+    gtk_widget_set_sensitive (data->start_box, years.empty ());
+}
+
+/* Asks for the first and the last day of a fiscal year and defines it. */
+static void
+settings_dialog_year_cb (GtkWidget* button, gpointer user_data)
+{
+    auto data {static_cast<SettingsDialog*> (user_data)};
+    auto years {gnc_se_book_get_fiscal_years (data->book)};
+    GDate today;
+    gnc_gdate_set_today (&today);
+    /* What is most likely wanted: the book's first year, the latest year
+     * to move its last day, or, when that one is closed, the next. */
+    auto suggested {years.empty ()
+                    ? gnc_se_book_get_fiscal_year (data->book, today)
+                    : years.back ()};
+    if (suggested.closed)
+    {
+        auto next_day {suggested.end};
+        g_date_add_days (&next_day, 1);
+        suggested = gnc_se_book_get_fiscal_year (data->book, next_day);
+    }
+
+    auto dialog {gtk_dialog_new_with_buttons (
+            _("Define or Change a Fiscal Year"), GTK_WINDOW (data->dialog),
+            static_cast<GtkDialogFlags> (GTK_DIALOG_MODAL |
+                                         GTK_DIALOG_DESTROY_WITH_PARENT),
+            _("_Cancel"), GTK_RESPONSE_CANCEL,
+            _("_OK"), GTK_RESPONSE_OK,
+            nullptr)};
+    auto grid {gtk_grid_new ()};
+    gtk_grid_set_row_spacing (GTK_GRID (grid), 8);
+    gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+    gtk_container_set_border_width (GTK_CONTAINER (grid), 12);
+    gtk_box_pack_start (
+        GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))), grid, TRUE,
+        TRUE, 0);
+    gtk_grid_attach (
+        GTK_GRID (grid),
+        wrapped_label (years.empty ()
+                       ? _("Enter the first and the last day of the book's "
+                           "first fiscal year. A fiscal year is at most 18 "
+                           "months.")
+                       : _("To move the last day of the latest fiscal year, "
+                           "keep its first day and change the last. To add "
+                           "the next year, enter the day after the latest "
+                           "year ends as the first day. A fiscal year is at "
+                           "most 18 months.")),
+        0, 0, 2, 1);
+    auto start_edit {gnc_date_edit_new (gnc_time (nullptr), FALSE, FALSE)};
+    gnc_date_edit_set_gdate (GNC_DATE_EDIT (start_edit), &suggested.start);
+    auto end_edit {gnc_date_edit_new (gnc_time (nullptr), FALSE, FALSE)};
+    gnc_date_edit_set_gdate (GNC_DATE_EDIT (end_edit), &suggested.end);
+    gtk_grid_attach (GTK_GRID (grid), grid_label (_("First day:")), 0, 1, 1, 1);
+    gtk_grid_attach (GTK_GRID (grid), start_edit, 1, 1, 1, 1);
+    gtk_grid_attach (GTK_GRID (grid), grid_label (_("Last day:")), 0, 2, 1, 1);
+    gtk_grid_attach (GTK_GRID (grid), end_edit, 1, 2, 1, 1);
+    gtk_widget_show_all (grid);
+
+    while (gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_OK)
+    {
+        GDate start, end;
+        g_date_clear (&start, 1);
+        g_date_clear (&end, 1);
+        gnc_date_edit_get_gdate (GNC_DATE_EDIT (start_edit), &start);
+        gnc_date_edit_get_gdate (GNC_DATE_EDIT (end_edit), &end);
+        auto result {gnc_se_book_define_fiscal_year (data->book, start, end)};
+        if (result.ok)
+            break;
+        gnc_error_dialog (GTK_WINDOW (dialog), "%s", result.error.c_str ());
+    }
+    gtk_widget_destroy (dialog);
+    settings_dialog_show_years (data);
+}
+
 static void
 settings_dialog_run (GtkWindow* parent, QofBook* book)
 {
     SettingsDialog data {book, nullptr, nullptr, nullptr, nullptr, nullptr,
-                         nullptr};
+                         nullptr, nullptr, nullptr};
     data.dialog = gtk_dialog_new_with_buttons (
         _("Voucher Series and Fiscal Year"), parent,
         static_cast<GtkDialogFlags> (GTK_DIALOG_MODAL |
@@ -721,6 +847,7 @@ settings_dialog_run (GtkWindow* parent, QofBook* book)
     /* The first day of the fiscal year. */
     auto [start_month, start_day] = gnc_se_book_get_fiscal_year_start (book);
     auto start_box {gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6)};
+    data.start_box = start_box;
     auto day_spin {gtk_spin_button_new_with_range (1, 31, 1)};
     gtk_spin_button_set_value (GTK_SPIN_BUTTON (day_spin), start_day);
     auto month_combo {gtk_combo_box_text_new ()};
@@ -738,6 +865,20 @@ settings_dialog_run (GtkWindow* parent, QofBook* book)
     gtk_grid_attach (GTK_GRID (grid),
                      grid_label (_("The fiscal year starts on:")), 0, row, 1, 1);
     gtk_grid_attach (GTK_GRID (grid), start_box, 1, row++, 1, 1);
+
+    /* The fiscal years the book has. */
+    auto years_box {gtk_box_new (GTK_ORIENTATION_VERTICAL, 6)};
+    data.years_list = grid_label ("");
+    auto year_button {gtk_button_new_with_mnemonic (
+            _("_Define or Change a Fiscal Year…"))};
+    gtk_widget_set_halign (year_button, GTK_ALIGN_START);
+    g_signal_connect (year_button, "clicked",
+                      G_CALLBACK (settings_dialog_year_cb), &data);
+    gtk_box_pack_start (GTK_BOX (years_box), data.years_list, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (years_box), year_button, FALSE, FALSE, 0);
+    gtk_grid_attach (GTK_GRID (grid), grid_label (_("Fiscal years:")), 0, row,
+                     1, 1);
+    gtk_grid_attach (GTK_GRID (grid), years_box, 1, row++, 1, 1);
 
     /* How long posting may be put off. */
     auto deferral {gnc_se_book_get_deferral (book)};
@@ -804,6 +945,7 @@ settings_dialog_run (GtkWindow* parent, QofBook* book)
         1, row++, 1, 1);
 
     settings_dialog_show_series (&data);
+    settings_dialog_show_years (&data);
     gtk_widget_show_all (grid);
 
     while (gtk_dialog_run (GTK_DIALOG (data.dialog)) == GTK_RESPONSE_OK)
@@ -812,7 +954,9 @@ settings_dialog_run (GtkWindow* parent, QofBook* book)
          * makes the book a GnuCash SE book. */
         auto month {gtk_combo_box_get_active (GTK_COMBO_BOX (month_combo)) + 1};
         auto day {gtk_spin_button_get_value_as_int (GTK_SPIN_BUTTON (day_spin))};
-        if (std::make_pair (month, day) !=
+        /* Once the book has fiscal years the first day is not a setting. */
+        if (gnc_se_book_get_fiscal_years (book).empty () &&
+            std::make_pair (month, day) !=
             gnc_se_book_get_fiscal_year_start (book) &&
             !gnc_se_book_set_fiscal_year_start (book, month, day))
         {
@@ -835,6 +979,143 @@ settings_dialog_run (GtkWindow* parent, QofBook* book)
         break;
     }
     gtk_widget_destroy (data.dialog);
+}
+
+/* ------------------------------------------------------------------ */
+/* Close Fiscal Year…                                                 */
+
+/* The year to close next: the earliest one the book has that is open,
+ * else the year after what is posted, else last year. */
+static GncSeFiscalYear
+year_to_close (const QofBook* book)
+{
+    for (const auto& year : gnc_se_book_get_fiscal_years (book))
+        if (!year.closed)
+            return year;
+    GDate date;
+    if (auto lock_date {gnc_se_book_get_lock_date (book)})
+    {
+        date = *lock_date;
+        g_date_add_days (&date, 1);
+    }
+    else
+    {
+        gnc_gdate_set_today (&date);
+        g_date_subtract_months (&date, 12);
+    }
+    return gnc_se_book_get_fiscal_year (book, date);
+}
+
+struct CloseYearDialog
+{
+    GtkWidget* dialog;
+    GtkWidget* signature;
+    bool possible;
+};
+
+static void
+close_year_dialog_changed_cb (GtkWidget* widget, gpointer user_data)
+{
+    auto data {static_cast<CloseYearDialog*> (user_data)};
+    gtk_dialog_set_response_sensitive (
+        GTK_DIALOG (data->dialog), GTK_RESPONSE_OK,
+        data->possible &&
+        !is_blank (gtk_entry_get_text (GTK_ENTRY (data->signature))));
+}
+
+static void
+close_year_dialog_run (GtkWindow* parent, QofBook* book)
+{
+    /* Do not number anything on top of a series that is already broken. */
+    if (!verify_and_report (parent, book, false))
+        return;
+
+    auto year {year_to_close (book)};
+    GDate today;
+    gnc_gdate_set_today (&today);
+    auto lock_date {gnc_se_book_get_lock_date (book)};
+    bool ended {g_date_compare (&year.end, &today) <= 0};
+    bool posted {lock_date && g_date_compare (&year.end, &*lock_date) <= 0};
+
+    std::string status;
+    bool possible {ended};
+    if (!ended)
+        status = _("The fiscal year has not ended yet, so it cannot be closed.");
+    else if (posted)
+        status = _("The year is already posted through its last day.");
+    else
+    {
+        auto plan {gnc_se_plan_lock (book, year.end)};
+        status = plan_text (plan);
+        possible = plan.ok;
+    }
+
+    CloseYearDialog data {nullptr, nullptr, possible};
+    data.dialog = gtk_dialog_new_with_buttons (
+        _("Close Fiscal Year"), parent,
+        static_cast<GtkDialogFlags> (GTK_DIALOG_MODAL |
+                                     GTK_DIALOG_DESTROY_WITH_PARENT),
+        _("_Cancel"), GTK_RESPONSE_CANCEL,
+        _("Close the _Year"), GTK_RESPONSE_OK,
+        nullptr);
+    gtk_dialog_set_default_response (GTK_DIALOG (data.dialog),
+                                     GTK_RESPONSE_CANCEL);
+    auto box {gtk_box_new (GTK_ORIENTATION_VERTICAL, 12)};
+    gtk_container_set_border_width (GTK_CONTAINER (box), 12);
+    gtk_box_pack_start (
+        GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (data.dialog))), box,
+        TRUE, TRUE, 0);
+
+    auto intro {format (_("Fiscal year %s, %s to %s. Closing it posts "
+                          "everything up to its last day and marks the year "
+                          "closed. Make the closing entries first: a closed "
+                          "year cannot be changed, and what is posted can only "
+                          "be corrected with correcting entries."),
+                        year.key.c_str (), date_text (year.start).c_str (),
+                        date_text (year.end).c_str ())};
+    gtk_box_pack_start (GTK_BOX (box), wrapped_label (intro.c_str ()), FALSE,
+                        FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (box), wrapped_label (status.c_str ()), FALSE,
+                        FALSE, 0);
+
+    auto row {gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6)};
+    gtk_box_pack_start (GTK_BOX (row), gtk_label_new (_("Your signature:")),
+                        FALSE, FALSE, 0);
+    data.signature = gtk_entry_new ();
+    gtk_box_pack_start (GTK_BOX (row), data.signature, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (box), row, FALSE, FALSE, 0);
+    g_signal_connect (data.signature, "changed",
+                      G_CALLBACK (close_year_dialog_changed_cb), &data);
+    close_year_dialog_changed_cb (nullptr, &data);
+    gtk_widget_show_all (box);
+    gtk_widget_grab_focus (data.signature);
+
+    auto response {gtk_dialog_run (GTK_DIALOG (data.dialog))};
+    std::string signature {gtk_entry_get_text (GTK_ENTRY (data.signature))};
+    gtk_widget_destroy (data.dialog);
+    if (response != GTK_RESPONSE_OK)
+        return;
+
+    gnc_suspend_gui_refresh ();
+    auto result {gnc_se_close_fiscal_year (book, year.start, signature)};
+    gnc_resume_gui_refresh ();
+    gnc_gui_refresh_all ();
+    if (!result.ok)
+    {
+        gnc_error_dialog (parent, "%s", result.error.c_str ());
+        return;
+    }
+    auto text {format (_("Fiscal year %s is closed."), year.key.c_str ())};
+    text += " ";
+    text += format (ngettext ("%d transaction was posted.",
+                              "%d transactions were posted.", result.locked),
+                    result.locked);
+    if (qof_book_session_not_saved (book))
+    {
+        text += " ";
+        text += _("Save the book to keep the posting.");
+    }
+    gnc_info_dialog (parent, "%s", text.c_str ());
 }
 
 /* ------------------------------------------------------------------ */
@@ -957,6 +1238,15 @@ gnc_plugin_se_cmd_verify (GSimpleAction* simple, GVariant* parameter,
     g_return_if_fail (data != nullptr);
     verify_and_report (GTK_WINDOW (data->window), gnc_get_current_book (),
                        true);
+}
+
+static void
+gnc_plugin_se_cmd_close_year (GSimpleAction* simple, GVariant* parameter,
+                              gpointer user_data)
+{
+    auto data {static_cast<GncMainWindowActionData*> (user_data)};
+    g_return_if_fail (data != nullptr);
+    close_year_dialog_run (GTK_WINDOW (data->window), gnc_get_current_book ());
 }
 
 static void

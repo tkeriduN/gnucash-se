@@ -25,7 +25,7 @@ beteende.
 | Sökväg | Innehåll | Synkrisk |
 |---|---|---|
 | `docs/` | forkens dokumentation (upstream har `doc/`, som lämnas orörd) | ingen |
-| `libgnucash/se/` | låsdatum, verifikationsserier, numrering vid låsning, vakten, kontrollsummekedja, kontroll, tidsgränser, rättelseverifikation och behandlingshistorik (`gnc-se.h`, `gnc-se.hpp`, `gnc-se.cpp`), med tester i `test/`. Källorna kompileras in i `gnc-engine` | ingen (använder motorns publika funktioner samt `qofinstance-p.h` och `kvp-frame.hpp` för KVP) |
+| `libgnucash/se/` | låsdatum, verifikationsserier, numrering vid låsning, vakten, kontrollsummekedja, kontroll, tidsgränser, rättelseverifikation, behandlingshistorik och räkenskapsår (`gnc-se.h`, `gnc-se.hpp`, `gnc-se.cpp`), med tester i `test/`. Källorna kompileras in i `gnc-engine` | ingen (använder motorns publika funktioner samt `qofinstance-p.h` och `kvp-frame.hpp` för KVP) |
 | `gnucash/gnome/gnc-plugin-se.cpp`, `gnc-plugin-se.h`, `gnucash/ui/gnc-plugin-se.ui` | menyn Åtgärder → Bokföring med dialogerna, och kontrollen när en bok öppnas | liten: följer mönstret för `gnc-plugin-budget`; ändras insticksgränssnittet (`GncPlugin`) upstream måste filen följa med |
 | `util/se/gui-test/`, `util/se/containers/future-gui/` | provkörning av gränssnittet på virtuell skärm | ingen |
 | `util/se/` | byggcontainer för `future` (`future-env`, `containers/`). Ligger utanför `util_DIST` i `util/CMakeLists.txt` och kommer därför inte med i källtarbollen | ingen |

@@ -25,6 +25,7 @@ efterfrågats) och en text.
 | `lock` | En period bokfördes: datum, och per serie och period vilka nummer som delades ut samt början av sista verifikationens kontrollsumma | ja |
 | `correction` | En rättelseverifikation skapades: för vilken verifikation, datum, anledning | ja |
 | `settings` | Räkenskapsårets första dag, senareläggning eller standardserie ändrades, eller en serie lades till | – |
+| `fiscal-year` | Ett räkenskapsår lades upp, fick sin sista dag flyttad eller avslutades (design 04) | vid avslut |
 | `account` | Ett konto lades till, togs bort, eller fick nytt nummer, namn, typ eller överordnat konto | – |
 | `tax-table` | En momstabell lades till, togs bort eller ändrades (namn, konto, sats) | – |
 | `program` | Boken öppnades skrivbart med en annan programversion än senast | – |
