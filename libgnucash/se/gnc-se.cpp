@@ -1720,7 +1720,7 @@ history_event_handler (QofInstance* entity, QofEventId event_type,
 {
     if (history_busy || !(event_type & (QOF_EVENT_MODIFY | QOF_EVENT_DESTROY)))
         return;
-    bool is_account {GNC_IS_ACCOUNT (entity)};
+    bool is_account = GNC_IS_ACCOUNT (entity) != 0;
     if (!is_account && !GNC_IS_TAXTABLE (entity))
         return;
     auto book {qof_instance_get_book (entity)};
