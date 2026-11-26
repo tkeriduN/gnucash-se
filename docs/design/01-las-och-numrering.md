@@ -1,6 +1,7 @@
 # Design 01 – fast lås och obruten verifikationsnumrering
 
-Status: **skiss, granskad av Isak 2026-11-26** (besluten står i avsnitt 9). Ingen kod är skriven. Kodhänvisningar gäller
+Status: **motorn byggd 2026-11-26** i `libgnucash/se/` (avsnitt 10 visar vad som finns och vad som återstår).
+Skissen granskades av Isak 2026-11-26; besluten står i avsnitt 9. Kodhänvisningar gäller
 `upstream/future` `515c96a83d` (2026-11-25).
 
 ## 1. Vad lagen kräver och vad funktionen ska göra
@@ -100,8 +101,9 @@ Konsekvenser:
   faktura. Skrivskyddet rensas, memot skrivs om till "Please delete this transaction" och splitten tas ur
   loten. Vanlig GnuCash kan alltså lyfta skyddet från en manuell, låst transaktion mot 1510 eller 2440 vid
   "Kontrollera och reparera" (kontoträdet, `gncScrubBusinessAccount`, och registret för en enskild
-  transaktion i ett reskontrakonto). SE måste stänga av den grenen för SE-låsta transaktioner (en krok), och
-  kontrollen (6.3) fångar det om det ändå händer, t.ex. när boken har öppnats i vanlig GnuCash.
+  transaktion i ett reskontrakonto). I SE stoppar vakten (5) både rensningen av skrivskyddet och
+  memoändringen, så ingen särskild krok behövs i `ScrubBusiness.c`. Kontrollen (6.3) fångar det när det har
+  hänt i vanlig GnuCash.
 - **Fakturor**: när en faktura bokförs sätts skrivskydd med orsaken "Generated from an invoice…", och
   "Avbokför" rensar det (`gncInvoice.c`). SE får inte skriva över orsaken på sådana transaktioner, och måste
   neka avbokföring av en faktura vars transaktion är låst.
@@ -109,13 +111,20 @@ Konsekvenser:
   bok med låsta poster måste gå genom samma spärr.
 - `xaccTransBeginEdit` returnerar `void` och kan inte neka. Spärren måste sitta i `xaccTransCommitEdit`
   (rulla tillbaka med `xaccTransRollbackEdit`) och i radering.
+- **Inläsning ser ut som redigering.** En backend som läser en bok skapar varje transaktion med
+  `xaccTransBeginEdit`/`xaccTransCommitEdit`. Motorn hade ingen uppgift om att en inläsning pågår, så forken
+  lägger till `qof_session_load_in_progress()`.
+- **`xaccTransSetDatePostedGDate` skrev datumet till KVP utanför redigeringsomgången.** Ett nekat datumbyte
+  rullades då bara tillbaka till hälften. Rättat i forken (hittat av testerna).
+- **Radering av ett konto** tar bort kontots splits även ur skrivskyddade transaktioner
+  (`xaccSplitDestroy` släpper igenom när kontot håller på att raderas). Se avsnitt 10.
 
 ## 5. Var spärren sitter
 
 | Alternativ | Skydd | Ändring i ärvd kod |
 |---|---|---|
 | A. Bara gränssnitt (som `autoreadonly`) | Svagt: Python-bindningar, import, scrub och skript går förbi | Litet, men spritt över många GUI-filer |
-| B. Spärr i motorn | Starkt i SE, oavsett vem som anropar | En krok i `xaccTransCommitEdit`, en i `xaccTransDestroy`/`xaccSplitDestroy`, en i `ScrubBusiness.c` |
+| B. Spärr i motorn | Starkt i SE, oavsett vem som anropar | En krok i `xaccTransCommitEdit` (radering går också den vägen), en uppgift om pågående inläsning i `qofsession.cpp` |
 | C. Som B, plus den ärvda nyckeln `trans-read-only` | Som B. Dessutom fungerar det ärvda skyddet i register, radering och makulering utan ny kod, och vid granskning i vanlig GnuCash | Som B |
 
 **Rekommendation: C.**
@@ -123,7 +132,7 @@ Konsekvenser:
 Spärrens innehåll: vid `xaccTransCommitEdit` på en SE-låst transaktion jämförs de skyddade fälten med
 klonen `trans->orig`. Har något skyddat fält ändrats rullas ändringen tillbaka (`xaccTransRollbackEdit`) och
 ett fel rapporteras. Skyddade fält: datum (bokförings- och registrering), beskrivning, `num`, valuta, och per
-split konto, värde, mängd, memo och action. Fritt efter låsning: avstämningsstatus och avstämningsdatum, lot,
+split konto, värde, mängd, memo och action, samt SE:s egna nycklar och att `trans-read-only` finns kvar. Fritt efter låsning: avstämningsstatus och avstämningsdatum, lot,
 dokumentlänk, anteckningar, `reversed-by`. Det är den praxis som gäller i svenska program: avstämning ändrar
 inte bokföringsposten.
 
@@ -131,10 +140,20 @@ Kod: ett eget bibliotek `libgnucash/se/` (`gnc-se`), som länkar mot `gnc-engine
 anropsställe: en vakt som är tom tills `gnc-se` registrerar den vid uppstart:
 
 ```c
-/* Transaction.h: forkens enda krok i motorns gränssnitt */
-typedef gboolean (*GncTransCommitGuard)(const Transaction *trans);
+/* Transaction.h */
+typedef gboolean (*GncTransCommitGuard) (Transaction *trans, const Transaction *orig);
 void gnc_trans_set_commit_guard (GncTransCommitGuard guard);
 ```
+
+Vaktens regler (`commit_guard` i `gnc-se.cpp`), i den här ordningen:
+
+1. Pågår en inläsning släpps allt igenom.
+2. Var transaktionen låst när redigeringen började: nej till radering, till borttaget skrivskydd och till
+   varje ändring av skyddade fält.
+3. Har transaktionen fått ett nummer under redigeringen: ja bara om det är `gnc_se_lock_through()` som låser.
+4. Annars (preliminär): radering är alltid tillåten. Övriga ändringar nekas om bokföringsdatumet ligger i
+   låst period. Mallar för schemalagda transaktioner, makulerade transaktioner och transaktioner utan splits
+   räknas inte.
 
 Med en vakt i stället för SE-logik i `Transaction.cpp` blir konflikterna vid synk mot upstream små, och låslogiken går att
 testa för sig. Allt annat ligger i `libgnucash/se/`: låsning, serier, kontroll, kontrollsummor, KVP-åtkomst
@@ -152,8 +171,8 @@ På boken:
 | `se/fiscal-year-start` | text | räkenskapsårets första dag som `MM-DD`, standard `01-01` (brutet räkenskapsår går att ange; förlängt och förkortat år kommer med design 04) |
 | `se/series/<kod>/description` | text | t.ex. "Verifikationer" (standardserien `A`) |
 | `se/series/<kod>/period` | text | `fiscal-year` (standard) eller `continuous` |
-| `se/series/<kod>/next` | heltal | nästa nummer (per år om `fiscal-year`: `se/series/<kod>/<år>/next`) |
-| `se/series/<kod>/head` | text | kontrollsumma för seriens senast låsta transaktion (6.3) |
+| `se/series/<kod>/periods/<period>/next` | heltal | nästa nummer i perioden. `<period>` är året då räkenskapsåret börjar (t.ex. `2025`), eller `all` för en löpande serie |
+| `se/series/<kod>/periods/<period>/head` | text | kontrollsumma för periodens senast låsta transaktion (6.3) |
 | `se/default-series` | text | standardserie |
 | `se/version` | heltal | formatversion för SE:s nycklar |
 
@@ -162,6 +181,7 @@ På transaktionen:
 | Nyckel | Typ | Innehåll |
 |---|---|---|
 | `se/series` | text | serie (sätts redan på den preliminära posten, ändringsbar tills låsning) |
+| `se/period` | text | perioden inom serien som numret hör till (sätts vid låsning) |
 | `se/number` | heltal | löpnummer |
 | `se/locked-at` | tid | låstidpunkt |
 | `se/hash` | text | kontrollsumma (6.3) |
@@ -186,10 +206,15 @@ för att granska innehållet, men att arbeta i samma bok i både GnuCash och SE 
 
 ### 6.3 Kontrollsummekedja och kontroll
 
-För varje serie bildas en kedja: `h(n) = SHA-256(h(n−1) ‖ kanonisk(trans n))`, med `h(0)` härledd ur bokens
-GUID och seriekoden. `kanonisk` är en fast, versionerad serialisering av de skyddade fälten (5) i bestämd
-ordning (splits sorterade på GUID), med belopp som exakta bråk. Hashen lagras i `se/hash` på transaktionen och
-seriens senaste i `se/series/<kod>/head`.
+För varje serie och period bildas en kedja: `h(n) = SHA-256(h(n−1) ‖ kanonisk(trans n))`, med `h(0)` härledd
+ur bokens GUID, seriekoden och perioden. `kanonisk` är en fast, versionerad serialisering av transaktionens
+GUID, serie, period och nummer följt av de skyddade fälten (5) i bestämd ordning (splits sorterade på GUID),
+med belopp som förkortade bråk och varje fält föregånget av sin längd. Hashen lagras i `se/hash` på
+transaktionen och periodens senaste i `…/periods/<period>/head`. Ett test med fasta GUID:n låser formatet:
+ändras serialiseringen ändras testets hash, och då behövs en ny formatversion.
+
+Varje transaktion kontrolleras mot den hash som är lagrad på föregående transaktion. En ändrad transaktion
+rapporteras därför som en avvikelse, inte som att resten av serien är fel.
 
 Kontrollen körs när en bok öppnas i SE och på begäran ("Kontrollera verifikationsserier"). Den hittar:
 - luckor och dubbletter i numreringen (raderad eller ändrad post),
@@ -246,3 +271,34 @@ motornära kod finns andra vägar (en liten inbyggd implementation). Beslutas n�
 | Gammal `num`-text vid första låsningen | Sparas i `se/former-num` |
 | Den ärvda nyckeln `trans-read-only` | Används (alternativ C). Det är ett fält i bokfilen som koden SE har ärvt redan respekterar, inte någon koppling till upstreamprojektet |
 | Ändringar och nya poster gjorda utanför SE | Stöds inte. Vanlig GnuCash är bara till för granskning. Kontrollen (6.3) rapporterar dem som fel |
+
+## 10. Byggt och återstår (2026-11-26)
+
+Byggt i `libgnucash/se/` (`gnc-se.hpp`, `gnc-se.cpp`), med tester i `test/gtest-gnc-se.cpp`:
+
+- bokinställningar: låsdatum, räkenskapsårets start, serier, standardserie;
+- `gnc_se_lock_through()`: låser och numrerar per serie och period i registreringsordning, sparar gammal
+  `num`, sätter `trans-read-only`, räknar kontrollsumman. Nekar om datumet är efter i dag eller inte efter
+  nuvarande låsdatum, om en transaktion är obalanserad eller saknar konto, och om det finns en preliminär
+  transaktion i redan låst period;
+- vakten (5) med kroken i `xaccTransCommitEdit()`;
+- `gnc_se_verify()`: luckor, dubbletter, ändrade transaktioner, borttaget skrivskydd, preliminära poster i låst
+  period, låsdatum som flyttats bakåt;
+- rundtur genom XML- och SQLite-backend.
+
+Återstår i steg 1:
+
+1. **Programmet anropar inte `gnc_se_init()` än.** Vakten är alltså bara aktiv i testerna. Kopplas in
+   tillsammans med det första sättet att låsa från programmet (punkt 2).
+2. **Gränssnitt** (7): "Bokför till och med…", serier i bokinställningarna, "preliminär" i registret,
+   kontroll när en bok öppnas, påminnelse om tidsgränser.
+3. **Kontroll före redigering.** Vakten rullar tillbaka i efterhand, och den som anropade får inget besked
+   annat än `gnc_se_last_rejection()`. Gränssnitt och importer ska fråga `gnc_se_date_is_locked()` innan de
+   skapar eller flyttar en transaktion. En ny transaktion som nekas blir i dag kvar som en tom transaktion
+   tills programmet tar bort den.
+4. **Fakturor**: avbokföring av en faktura vars transaktion är låst ska nekas innan fakturan ändras. I dag
+   stoppar vakten ändringen av transaktionen, men fakturan markeras ändå som inte bokförd.
+5. **Radering av konto** med låsta transaktioner ska nekas i motorn. Gränssnittet nekar redan (kontot har
+   skrivskyddade transaktioner), men ett anrop direkt till motorn går förbi och hittas först av kontrollen.
+6. **Automatiskt skapade transaktioner** med datum i låst period (schemalagda transaktioner som körs i
+   efterhand, kursvinster): ska få datum i öppen period eller nekas med besked.
