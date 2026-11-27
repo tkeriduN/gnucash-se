@@ -57,6 +57,9 @@ include (GNUInstallDirs)
 include (TestBigEndian)
 include (CheckStructHasMember)
 
+# GnuCash SE: the fork's own defaults for the options below.
+include (${CMAKE_SOURCE_DIR}/se/cmake/SeDefaults.cmake)
+
 # ############################################################
 # These options are settable from the CMake command line. For example, to disable
 # SQL, put -D WITH_SQL=OFF on the command line.
@@ -902,6 +905,8 @@ endif()
 add_subdirectory (bindings)
 add_subdirectory (test-templates)
 add_subdirectory (util)
+# GnuCash SE: command layer, server, command line client and web client.
+add_subdirectory (se)
 
 # This cmake subdir must be the last add_subdirectory() call because
 # it contains post-install actions to execute.
