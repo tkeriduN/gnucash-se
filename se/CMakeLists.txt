@@ -5,5 +5,9 @@
 # web client. Everything below this directory is licensed under the GNU Affero
 # General Public License, version 3 or later (see README.md).
 #
-# Nothing is built here yet. The subdirectories are added as they come into
-# being: core (command layer), server, cli, web, api, test.
+# The subdirectories are added as they come into being: core (command layer),
+# server, cli, web, api, test.
+
+if (WITH_SE_SERVER)
+  add_subdirectory (tools)
+endif()
