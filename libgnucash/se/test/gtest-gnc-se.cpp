@@ -64,7 +64,8 @@ static std::string
 slot (const Transaction* trans, const char* key)
 {
     auto value {qof_instance_get_path_kvp<const char*> (
-            QOF_INSTANCE (const_cast<Transaction*> (trans)), {"se", key})};
+            QOF_INSTANCE (const_cast<Transaction*> (trans)),
+            {std::string {"se-"} + key})};
     return value && *value ? *value : "";
 }
 
@@ -491,7 +492,7 @@ TEST_F (SeTest, a_locked_transaction_cannot_be_deleted_or_unlocked)
     /* The lock itself. */
     xaccTransBeginEdit (m_first);
     qof_instance_set_path_kvp<int64_t> (QOF_INSTANCE (m_first), 7,
-                                        {"se", "number"});
+                                        {"se-number"});
     xaccTransCommitEdit (m_first);
     EXPECT_EQ (gnc_se_trans_get_number (m_first), 1);
 
@@ -750,7 +751,7 @@ TEST_F (SeTest, a_number_cannot_be_set_from_outside)
     add_january ();
     xaccTransBeginEdit (m_first);
     qof_instance_set_path_kvp<int64_t> (QOF_INSTANCE (m_first), 1,
-                                        {"se", "number"});
+                                        {"se-number"});
     xaccTransCommitEdit (m_first);
 
     EXPECT_FALSE (gnc_se_trans_is_locked (m_first));
@@ -922,19 +923,19 @@ TEST_F (SeCorrectionTest, posting_the_correcting_entry_marks_the_original)
     xaccTransBeginEdit (correction);
     qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (correction),
                                             g_strdup ("XX"),
-                                            {"se", "signature"});
+                                            {"se-signature"});
     xaccTransCommitEdit (correction);
     EXPECT_EQ (gnc_se_trans_get_signature (correction), "IA");
     xaccTransBeginEdit (correction);
     qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (correction),
                                             g_strdup ("Another reason"),
-                                            {"se", "reason"});
+                                            {"se-reason"});
     xaccTransCommitEdit (correction);
     EXPECT_EQ (gnc_se_trans_get_reason (correction), "Wrong amount");
     xaccTransBeginEdit (correction);
     qof_instance_set_path_kvp<GncGUID*> (
         QOF_INSTANCE (correction), guid_copy (xaccTransGetGUID (m_second)),
-        {"se", "corrects"});
+        {"se-corrects"});
     xaccTransCommitEdit (correction);
     EXPECT_EQ (gnc_se_trans_get_corrected (correction), m_first);
     xaccTransDestroy (correction);
@@ -961,7 +962,7 @@ TEST_F (SeCorrectionTest, a_signature_changed_outside_is_found)
     gnc_se_shutdown (); /* As in plain GnuCash. */
     qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (result.correction),
                                             g_strdup ("XX"),
-                                            {"se", "signature"});
+                                            {"se-signature"});
     auto issues {gnc_se_verify (m_book)};
     ASSERT_EQ (issues.size (), 1u);
     EXPECT_EQ (issues[0].type, GncSeIssueType::CHANGED);
@@ -1173,7 +1174,7 @@ TEST_F (SeTest, a_transaction_numbered_in_the_wrong_year_is_found)
 
     /* The year is cut short behind the back of GnuCash SE. */
     qof_instance_set_path_kvp<GDate> (QOF_INSTANCE (m_book), date (2025, 1, 12),
-                                      {"se", "fiscal-years", "2025", "end"});
+                                      {"se-fiscal-years:2025:end"});
     auto types {issue_types ()};
     EXPECT_EQ (std::count (types.begin (), types.end (),
                            GncSeIssueType::PERIOD_MISMATCH), 2);
@@ -1399,7 +1400,7 @@ TEST_F (SeHistoryTest, a_changed_history_is_found)
     ASSERT_TRUE (gnc_se_verify (m_book).empty ());
     qof_instance_set_path_kvp<const char*> (
         QOF_INSTANCE (m_book), g_strdup ("Nothing happened."),
-        {"se", "history", "events", "2", "text"});
+        {"se-history:events:2:text"});
     auto issues {gnc_se_verify (m_book)};
     ASSERT_EQ (issues.size (), 1u);
     EXPECT_EQ (issues[0].type, GncSeIssueType::HISTORY_CHANGED);
@@ -1536,7 +1537,7 @@ TEST_F (SeVerifyTest, a_new_transaction_in_the_locked_period_is_found)
 TEST_F (SeVerifyTest, a_copied_number_is_found)
 {
     qof_instance_set_path_kvp<int64_t> (QOF_INSTANCE (m_third), 2,
-                                        {"se", "number"});
+                                        {"se-number"});
     auto types {issue_types ()};
     EXPECT_NE (std::find (types.begin (), types.end (),
                           GncSeIssueType::DUPLICATE_NUMBER), types.end ());
@@ -1547,7 +1548,7 @@ TEST_F (SeVerifyTest, a_copied_number_is_found)
 TEST_F (SeVerifyTest, a_lock_date_moved_back_is_found)
 {
     qof_instance_set_path_kvp<GDate> (QOF_INSTANCE (m_book), date (2025, 1, 12),
-                                      {"se", "lock-date"});
+                                      {"se-lock-date"});
     auto issues {gnc_se_verify (m_book)};
     ASSERT_EQ (issues.size (), 2u); /* dated 15 and 20 January */
     EXPECT_EQ (issues[0].type, GncSeIssueType::LOCKED_AFTER_LOCK_DATE);

@@ -45,11 +45,13 @@
 
 static QofLogModule log_module = "gnc.se";
 
-/* Version of the "se" slots. */
-static const int64_t FORMAT_VERSION = 1;
+/* Version of GnuCash SE's slots. Version 2 has flat keys (design 06). */
+static const int64_t FORMAT_VERSION = 2;
 
-/* Everything GnuCash SE stores lives under this slot, on the book and
- * on each transaction. Described in docs/design/01-las-och-numrering.md. */
+/* The first element of every path that GnuCash SE stores under, on the
+ * book and on each transaction. The paths are described in
+ * docs/design/01-las-och-numrering.md; how they are stored, in
+ * docs/design/06-motorn-for-server.md. */
 static const char* SE = "se";
 
 static const char* DEFAULT_SERIES = "A";
@@ -75,17 +77,53 @@ inst (const Transaction* trans)
     return QOF_INSTANCE (const_cast<Transaction*> (trans));
 }
 
+/* The SQL backend stores every nested frame as a group of rows of its
+ * own, read with one query per frame and deleted with two. GnuCash SE
+ * therefore has no nested frames: a path {"se", "a", "b"} is the single
+ * key "se-a:b" at the top level of the instance. The elements after the
+ * first are series codes, period names, GUIDs and fixed words; none of
+ * them contains a colon or a slash. */
+static Path
+flat (const Path& path)
+{
+    std::string key {path.empty () ? "" : path.front ()};
+    for (size_t i = 1; i < path.size (); ++i)
+    {
+        key += i == 1 ? '-' : ':';
+        key += path[i];
+    }
+    return {key};
+}
+
+template <typename T> static std::optional<T>
+get_kvp (QofInstance* instance, const Path& path)
+{
+    return qof_instance_get_path_kvp<T> (instance, flat (path));
+}
+
+template <typename T> static void
+set_kvp (QofInstance* instance, T value, const Path& path)
+{
+    qof_instance_set_path_kvp<T> (instance, value, flat (path));
+}
+
+static void
+delete_kvp (QofInstance* instance, const Path& path)
+{
+    qof_instance_slot_path_delete (instance, flat (path));
+}
+
 static std::string
 get_string (QofInstance* instance, const Path& path)
 {
-    auto value {qof_instance_get_path_kvp<const char*> (instance, path)};
+    auto value {get_kvp<const char*> (instance, path)};
     return value && *value ? *value : "";
 }
 
 static int64_t
 get_int (QofInstance* instance, const Path& path)
 {
-    auto value {qof_instance_get_path_kvp<int64_t> (instance, path)};
+    auto value {get_kvp<int64_t> (instance, path)};
     return value ? *value : 0;
 }
 
@@ -93,20 +131,20 @@ static void
 set_string (QofInstance* instance, const Path& path, const std::string& value)
 {
     /* The slot takes ownership of the string. */
-    qof_instance_set_path_kvp<const char*> (instance,
+    set_kvp<const char*> (instance,
                                             g_strdup (value.c_str ()), path);
 }
 
 static void
 set_int (QofInstance* instance, const Path& path, int64_t value)
 {
-    qof_instance_set_path_kvp<int64_t> (instance, value, path);
+    set_kvp<int64_t> (instance, value, path);
 }
 
 static const GncGUID*
 get_guid (QofInstance* instance, const Path& path)
 {
-    auto value {qof_instance_get_path_kvp<GncGUID*> (instance, path)};
+    auto value {get_kvp<GncGUID*> (instance, path)};
     return value ? *value : nullptr;
 }
 
@@ -114,7 +152,7 @@ static void
 set_guid (QofInstance* instance, const Path& path, const GncGUID* guid)
 {
     /* The slot takes ownership of the copy. */
-    qof_instance_set_path_kvp<GncGUID*> (instance, guid_copy (guid), path);
+    set_kvp<GncGUID*> (instance, guid_copy (guid), path);
 }
 
 namespace
@@ -183,7 +221,7 @@ std::optional<GDate>
 gnc_se_book_get_lock_date (const QofBook* book)
 {
     g_return_val_if_fail (book, std::nullopt);
-    auto date {qof_instance_get_path_kvp<GDate> (inst (book), {SE, "lock-date"})};
+    auto date {get_kvp<GDate> (inst (book), {SE, "lock-date"})};
     if (date && g_date_valid (&*date))
         return date;
     return std::nullopt;
@@ -285,14 +323,28 @@ find_series (const QofBook* book, const std::string& code)
                                         : GncSePeriodType::FISCAL_YEAR};
 }
 
-/* The names of the slots directly below @a path. */
+/* The names directly below @a path: the distinct next elements of the
+ * instance's keys that start with the path. In order. */
 static std::vector<std::string>
 child_keys (QofInstance* instance, const Path& path)
 {
+    std::vector<std::string> children;
     auto slots {qof_instance_get_slots (instance)};
-    auto value {slots ? slots->get_slot (path) : nullptr};
-    auto frame {value ? value->get<KvpFrame*> () : nullptr};
-    return frame ? frame->get_keys () : std::vector<std::string> {};
+    if (!slots)
+        return children;
+    auto prefix {flat (path).front () + ":"};
+    for (const auto& key : slots->get_keys ())
+    {
+        if (key.compare (0, prefix.size (), prefix) != 0)
+            continue;
+        auto child {key.substr (prefix.size (),
+                                key.find (':', prefix.size ()) - prefix.size ())};
+        if (std::find (children.begin (), children.end (), child) ==
+            children.end ())
+            children.push_back (child);
+    }
+    std::sort (children.begin (), children.end ());
+    return children;
 }
 
 std::vector<GncSeSeries>
@@ -453,13 +505,13 @@ gnc_se_book_get_fiscal_years (const QofBook* book)
     g_return_val_if_fail (book, years);
     for (const auto& key : child_keys (inst (book), {SE, FISCAL_YEARS}))
     {
-        auto start {qof_instance_get_path_kvp<GDate> (
+        auto start {get_kvp<GDate> (
                 inst (book), {SE, FISCAL_YEARS, key, "start"})};
-        auto end {qof_instance_get_path_kvp<GDate> (
+        auto end {get_kvp<GDate> (
                 inst (book), {SE, FISCAL_YEARS, key, "end"})};
         if (!start || !end || !g_date_valid (&*start) || !g_date_valid (&*end))
             continue;
-        auto closed_at {qof_instance_get_path_kvp<Time64> (
+        auto closed_at {get_kvp<Time64> (
                 inst (book), {SE, FISCAL_YEARS, key, "closed-at"})};
         years.push_back ({key, *start, *end, true,
                           closed_at && closed_at->t != 0,
@@ -560,9 +612,9 @@ gnc_se_book_get_fiscal_year (const QofBook* book, const GDate& date)
 static void
 store_year (QofBook* book, const GncSeFiscalYear& year)
 {
-    qof_instance_set_path_kvp<GDate> (inst (book), year.start,
+    set_kvp<GDate> (inst (book), year.start,
                                       {SE, FISCAL_YEARS, year.key, "start"});
-    qof_instance_set_path_kvp<GDate> (inst (book), year.end,
+    set_kvp<GDate> (inst (book), year.end,
                                       {SE, FISCAL_YEARS, year.key, "end"});
 }
 
@@ -632,7 +684,7 @@ gnc_se_book_define_fiscal_year (QofBook* book, const GDate& start,
         if (lock_date && g_date_compare (&end, &*lock_date) < 0)
             return {false, _("The book is already posted past that day. The "
                              "fiscal year cannot end before the lock date.")};
-        qof_instance_set_path_kvp<GDate> (inst (book), end,
+        set_kvp<GDate> (inst (book), end,
                                           {SE, FISCAL_YEARS, last.key, "end"});
         history_append (book, "fiscal-year", "",
                         text_printf (_("The last day of fiscal year %s was "
@@ -909,7 +961,7 @@ lock_slots (const Transaction* trans)
     put (out, get_string (inst (trans), {SE, "series"}));
     put (out, get_string (inst (trans), {SE, "period"}));
     put (out, std::to_string (get_int (inst (trans), {SE, "number"})));
-    auto locked_at {qof_instance_get_path_kvp<Time64> (inst (trans),
+    auto locked_at {get_kvp<Time64> (inst (trans),
                                                        {SE, "locked-at"})};
     put (out, std::to_string (locked_at ? locked_at->t : 0));
     put (out, get_string (inst (trans), {SE, "hash"}));
@@ -1377,7 +1429,7 @@ lock_transaction (Transaction* trans, const PeriodKey& key, PeriodState& state)
     set_string (inst (trans), {SE, "series"}, key.first);
     set_string (inst (trans), {SE, "period"}, key.second);
     set_int (inst (trans), {SE, "number"}, number);
-    qof_instance_set_path_kvp<Time64> (inst (trans), Time64 {gnc_time (nullptr)},
+    set_kvp<Time64> (inst (trans), Time64 {gnc_time (nullptr)},
                                        {SE, "locked-at"});
     xaccTransSetNum (trans, voucher.c_str ());
     if (!xaccTransGetReadOnly (trans))
@@ -1570,7 +1622,7 @@ gnc_se_lock_through (QofBook* book, const GDate& date,
         return result;
     }
 
-    qof_instance_set_path_kvp<GDate> (inst (book), date, {SE, "lock-date"});
+    set_kvp<GDate> (inst (book), date, {SE, "lock-date"});
 
     char date_text[MAX_DATE_LENGTH + 1] = "";
     qof_print_gdate (date_text, sizeof date_text, &date);
@@ -1656,7 +1708,7 @@ gnc_se_close_fiscal_year (QofBook* book, const GDate& date,
         locked = result.locked;
     }
 
-    qof_instance_set_path_kvp<Time64> (
+    set_kvp<Time64> (
         inst (book), Time64 {gnc_time (nullptr)},
         {SE, FISCAL_YEARS, year.key, "closed-at"});
     set_string (inst (book), {SE, FISCAL_YEARS, year.key, "closed-by"}, who);
@@ -1780,7 +1832,7 @@ history_started (const QofBook* book)
 static GncSeEvent
 read_event (const QofBook* book, int64_t number)
 {
-    auto time {qof_instance_get_path_kvp<Time64> (inst (book),
+    auto time {get_kvp<Time64> (inst (book),
                                                   event_path (number, "time"))};
     return {number, time ? time->t : 0,
             get_string (inst (book), event_path (number, "type")),
@@ -1800,7 +1852,7 @@ write_event (QofBook* book, const char* type, const std::string& signature,
 
     GncSeEvent event {number, gnc_time (nullptr), type, signature, text};
     auto hash {history_chain_next (previous, event)};
-    qof_instance_set_path_kvp<Time64> (inst (book), Time64 {event.time},
+    set_kvp<Time64> (inst (book), Time64 {event.time},
                                        event_path (number, "time"));
     set_string (inst (book), event_path (number, "type"), event.type);
     set_string (inst (book), event_path (number, "signature"), event.signature);
@@ -1915,9 +1967,8 @@ sync_watched (QofBook* book, const char* kind, const GncGUID* guid,
     {
         if (old_state.empty ())
             return;
-        qof_instance_slot_path_delete (inst (book), state_path);
-        qof_instance_slot_path_delete (inst (book), text_path);
-        qof_instance_slot_path_delete_if_empty (inst (book), base);
+        delete_kvp (inst (book), state_path);
+        delete_kvp (inst (book), text_path);
         if (log)
             write_event (book, kind, "", text_printf (removed, old_text.c_str ()));
         return;
@@ -2260,7 +2311,7 @@ gnc_se_history_text (QofBook* book)
             char date[MAX_DATE_LENGTH + 1] = "";
             auto posted {xaccTransGetDatePostedGDate (trans)};
             qof_print_gdate (date, sizeof date, &posted);
-            auto locked_at {qof_instance_get_path_kvp<Time64> (
+            auto locked_at {get_kvp<Time64> (
                     inst (trans), {SE, "locked-at"})};
 
             std::string correction;

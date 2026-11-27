@@ -51,7 +51,7 @@ for backend in $backends; do
         postgres)
             psql -h 127.0.0.1 -U gnc -d "bench_$size" -At \
                 -c "select 'rader i slots: ' || count(*) from slots" \
-                -c "select 'varav SE-historiken i bokens KVP: ' || count(*) from slots where name like 'se/history/%'" \
+                -c "select 'varav SE-historiken i bokens KVP: ' || count(*) from slots where name like 'se-history:%'" \
                 -c "select 'databasens storlek: ' || pg_size_pretty(pg_database_size(current_database()))" ;;
     esac
     echo
