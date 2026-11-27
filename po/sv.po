@@ -32517,6 +32517,11 @@ msgstr "har en rättelseverifikation som inte är bokförd än"
 msgid "corrected by %s"
 msgstr "rättad genom %s"
 
+#. Translators: the first %s is the name of a setting, the second its new value.
+#, c-format
+msgid "The setting %s is now \"%s\"."
+msgstr "Inställningen %s är nu ”%s”."
+
 #, c-format
 msgid "The scheduled transaction \"%s\" for %s falls in a locked period and was not created. Enter it by hand in an open period and skip this occurrence."
 msgstr "Den schemalagda transaktionen ”%s” för %s hamnar i en låst period och skapades inte. Registrera den för hand i en öppen period och hoppa över den här förekomsten."

@@ -465,6 +465,36 @@ std::shared_ptr<GncSeHistoryStore> gnc_se_book_get_history_store (
 void gnc_se_history_to_book (QofBook* book);
 /** @} */
 
+/** @name Settings of the book
+ *
+ * Short texts that belong to the book, such as the company's name and
+ * the currency the books are kept in. @a name is made of the letters
+ * a-z, digits and hyphens. A change is recorded in the processing
+ * history.
+ @{ */
+std::string gnc_se_book_get_setting (const QofBook* book,
+                                     const std::string& name);
+/** @return false if the name is not valid. */
+bool gnc_se_book_set_setting (QofBook* book, const std::string& name,
+                              const std::string& value);
+/** @} */
+
+/** The transaction's place in the order of entry: a running number from
+ *  when it was first saved in GnuCash SE, or 0 if it has none. */
+int64_t gnc_se_trans_get_seq (const Transaction* trans);
+
+/** @name The order of a voucher's lines
+ *
+ * The engine does not promise to keep a transaction's splits in the
+ * order they were entered, and the SQL backend does not: it reads them
+ * back as the database returns them. A split therefore carries its
+ * place among the lines, 1, 2, 3, ...; 0 if it has none. Set while the
+ * transaction is being edited.
+ @{ */
+int64_t gnc_se_split_get_line (const Split* split);
+void gnc_se_split_set_line (Split* split, int64_t line);
+/** @} */
+
 /** @name Who is acting
  *
  * The server sets this before each command, to the user who is logged

@@ -456,6 +456,40 @@ gnc_se_book_set_deferral (QofBook* book, GncSeDeferral deferral)
                         "the month."));
 }
 
+std::string
+gnc_se_book_get_setting (const QofBook* book, const std::string& name)
+{
+    g_return_val_if_fail (book, "");
+    return get_string (inst (book), {SE, "settings", name});
+}
+
+bool
+gnc_se_book_set_setting (QofBook* book, const std::string& name,
+                         const std::string& value)
+{
+    g_return_val_if_fail (book, false);
+    if (name.empty () || name.size () > 40 ||
+        !std::all_of (name.begin (), name.end (), [] (unsigned char c)
+                      { return g_ascii_islower (c) || g_ascii_isdigit (c) ||
+                               c == '-'; }))
+        return false;
+    if (value == gnc_se_book_get_setting (book, name))
+        return true;
+    BookEdit edit {book};
+    if (value.empty ())
+        delete_kvp (inst (book), {SE, "settings", name});
+    else
+        set_string (inst (book), {SE, "settings", name}, value);
+    qof_instance_set_dirty (inst (book));
+    mark_book (book);
+    /* Translators: the first %s is the name of a setting, the second
+     * its new value. */
+    history_append (book, "settings", "",
+                    text_printf (_("The setting %s is now \"%s\"."),
+                                 name.c_str (), value.c_str ()));
+    return true;
+}
+
 /* ------------------------------------------------------------------ */
 /* Fiscal years                                                       */
 
@@ -746,6 +780,28 @@ gnc_se_trans_get_number (const Transaction* trans)
 {
     g_return_val_if_fail (trans, 0);
     return get_int (inst (trans), {SE, "number"});
+}
+
+int64_t
+gnc_se_trans_get_seq (const Transaction* trans)
+{
+    g_return_val_if_fail (trans, 0);
+    return get_int (inst (trans), {SE, "seq"});
+}
+
+int64_t
+gnc_se_split_get_line (const Split* split)
+{
+    g_return_val_if_fail (split, 0);
+    return get_int (QOF_INSTANCE (const_cast<Split*> (split)), {SE, "line"});
+}
+
+void
+gnc_se_split_set_line (Split* split, int64_t line)
+{
+    g_return_if_fail (split);
+    set_int (QOF_INSTANCE (split), {SE, "line"}, line);
+    qof_instance_set_dirty (QOF_INSTANCE (split));
 }
 
 gboolean
