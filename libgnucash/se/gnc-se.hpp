@@ -37,6 +37,7 @@
 #include <glib.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -123,6 +124,54 @@ struct GncSeEvent
                            ///< "program" or "check".
     std::string signature; ///< Who did it, where that was asked for.
     std::string text;      ///< What happened, in the language of the user.
+};
+
+/** An entry of the processing history as it is stored: the event and
+ *  its hash in the chain. */
+struct GncSeStoredEvent
+{
+    GncSeEvent event;
+    std::string hash;
+};
+
+/** What the processing history knows about an account or a tax table:
+ *  a state to compare with, and a text to show. */
+struct GncSeWatched
+{
+    std::string state;
+    std::string text;
+};
+
+/** Where a book's processing history is kept when it is not in the
+ *  book's own slots (design 06). A backend that stores every slot as a
+ *  row, like the SQL backend, provides one that keeps the history in
+ *  tables of its own. @a kind is "account" or "tax-table", and @a key
+ *  the object's GUID as text. */
+class GncSeHistoryStore
+{
+public:
+    virtual ~GncSeHistoryStore () = default;
+
+    /** The stored events, oldest first. */
+    virtual std::vector<GncSeStoredEvent> events () const = 0;
+    virtual std::optional<GncSeStoredEvent> event (int64_t number) const = 0;
+    virtual void append (const GncSeStoredEvent& event) = 0;
+
+    virtual std::optional<GncSeWatched>
+    watched (const std::string& kind, const std::string& key) const = 0;
+    virtual void set_watched (const std::string& kind, const std::string& key,
+                              const GncSeWatched& watched) = 0;
+    virtual void erase_watched (const std::string& kind,
+                                const std::string& key) = 0;
+    /** The keys of what is known of a kind, in order. */
+    virtual std::vector<std::string>
+    watched_keys (const std::string& kind) const = 0;
+
+    /** Start, finish or undo a unit of work in the storage; see
+     *  gnc_se_command_begin(). */
+    virtual bool begin () { return true; }
+    virtual bool commit () { return true; }
+    virtual bool rollback () { return true; }
 };
 
 /** The outcome of gnc_se_correct(). */
@@ -397,6 +446,39 @@ void gnc_se_history_record_issues (QofBook* book,
  *  transaction with its voucher number and when it was entered and
  *  posted. */
 std::string gnc_se_history_text (QofBook* book);
+
+/** Keep the book's processing history in @a store from now on. What the
+ *  book's slots hold of it is moved there; the position in the chain
+ *  (the next number and the last hash) stays in the book, so that a
+ *  store that has been changed, cut short or lost does not match the
+ *  book. Called by the backend, not by programs. */
+void gnc_se_book_set_history_store (QofBook* book,
+                                    std::shared_ptr<GncSeHistoryStore> store);
+
+/** The store that keeps the book's processing history, or nothing if
+ *  it is in the book's slots. */
+std::shared_ptr<GncSeHistoryStore> gnc_se_book_get_history_store (
+    const QofBook* book);
+
+/** Put the processing history back into the book's slots and let go of
+ *  the store, e.g. before the book is written to an XML file. */
+void gnc_se_history_to_book (QofBook* book);
+/** @} */
+
+/** @name One unit of work in the storage
+ *
+ * The engine saves each object on its own. Between gnc_se_command_begin()
+ * and gnc_se_command_commit() everything that is saved becomes one unit
+ * in the book's storage: all of it is kept, or with
+ * gnc_se_command_rollback() none of it. They can be nested. With a
+ * storage that writes the whole book at once (XML) they do nothing.
+ *
+ * A rollback undoes what was stored, not what is in memory: after one,
+ * the book has to be loaded again.
+ @{ */
+bool gnc_se_command_begin (QofBook* book);
+bool gnc_se_command_commit (QofBook* book);
+bool gnc_se_command_rollback (QofBook* book);
 /** @} */
 
 /** Check the locked transactions against their series: unbroken

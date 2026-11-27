@@ -47,6 +47,7 @@
 #include "gnc-recurrence-sql.h"
 #include "gnc-schedxaction-sql.h"
 #include "gnc-slots-sql.h"
+#include "gnc-se-sql.h"
 #include "gnc-transaction-sql.h"
 
 #include "gnc-bill-term-sql.h"
@@ -86,6 +87,25 @@ GncSqlBackend::GncSqlBackend(GncSqlConnection *conn, QofBook* book) :
 GncSqlBackend::~GncSqlBackend()
 {
     connect(nullptr);
+}
+
+/* GnuCash SE: one unit of work around several commits (design 06). */
+bool
+GncSqlBackend::begin_transaction() noexcept
+{
+    return m_conn && m_conn->begin_transaction();
+}
+
+bool
+GncSqlBackend::commit_transaction() noexcept
+{
+    return m_conn && m_conn->commit_transaction();
+}
+
+bool
+GncSqlBackend::rollback_transaction() noexcept
+{
+    return m_conn && m_conn->rollback_transaction();
 }
 
 void
@@ -474,6 +494,7 @@ GncSqlBackend::sync(QofBook* book)
     g_return_if_fail (book != NULL);
     g_return_if_fail (m_conn != nullptr);
 
+    gnc_sql_se_before_sync(this, book); // GnuCash SE
     reset_version_info();
     ENTER ("book=%p, sql_be->book=%p", book, m_book);
     update_progress(101.0);
@@ -1006,6 +1027,7 @@ GncSqlBackend::ObjectBackendRegistry::ObjectBackendRegistry()
     register_backend(std::make_shared<GncSqlOrderBackend>());
     register_backend(std::make_shared<GncSqlTaxTableBackend>());
     register_backend(std::make_shared<GncSqlVendorBackend>());
+    register_backend(std::make_shared<GncSqlSeHistoryBackend>()); // GnuCash SE
 }
 
 void

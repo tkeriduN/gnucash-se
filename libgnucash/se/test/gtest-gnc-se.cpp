@@ -1753,5 +1753,145 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
     EXPECT_TRUE (gnc_se_verify (m_book).empty ());
 }
 
+/* Design 06: with a backend that stores every slot as a row, the
+ * processing history is kept in tables of its own, and only the
+ * position in the chain stays in the book. */
+TEST_P (SeFileTest, the_history_is_stored_where_the_backend_keeps_it)
+{
+    bool sql {std::string {GetParam ()} != "xml"};
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    xaccAccountBeginEdit (m_costs);
+    xaccAccountSetName (m_costs, "Hyra");
+    xaccAccountCommitEdit (m_costs);
+    auto before {gnc_se_book_get_history (m_book)};
+    ASSERT_GE (before.size (), 3u);
+    EXPECT_EQ (before.back ().type, "account");
+
+    ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
+
+    EXPECT_EQ (gnc_se_book_get_history_store (m_book) != nullptr, sql);
+    size_t in_slots = 0;
+    for (const auto& key : qof_instance_get_slots (QOF_INSTANCE (m_book))->get_keys ())
+        if (key.starts_with ("se-history:events:") ||
+            key.starts_with ("se-history:account:"))
+            ++in_slots;
+    if (sql)
+        EXPECT_EQ (in_slots, 0u);
+    else
+        EXPECT_GT (in_slots, 0u);
+
+    auto after {gnc_se_book_get_history (m_book)};
+    ASSERT_EQ (after.size (), before.size ());
+    for (size_t i = 0; i < before.size (); ++i)
+    {
+        EXPECT_EQ (after[i].number, before[i].number);
+        EXPECT_EQ (after[i].time, before[i].time);
+        EXPECT_EQ (after[i].type, before[i].type);
+        EXPECT_EQ (after[i].signature, before[i].signature);
+        EXPECT_EQ (after[i].text, before[i].text);
+    }
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+    gnc_se_history_sync (m_book); /* Nothing has changed since. */
+    EXPECT_EQ (gnc_se_book_get_history (m_book).size (), before.size ());
+
+    /* What happens from here on is stored as it happens. */
+    auto bank {gnc_account_lookup_by_code (gnc_book_get_root_account (m_book),
+                                           "1930")};
+    ASSERT_NE (bank, nullptr);
+    xaccAccountBeginEdit (bank);
+    xaccAccountSetName (bank, "Bankkonto");
+    xaccAccountCommitEdit (bank);
+    ASSERT_EQ (gnc_se_book_get_history (m_book).size (), before.size () + 1);
+
+    ASSERT_NO_FATAL_FAILURE (reopen ());
+    auto again {gnc_se_book_get_history (m_book)};
+    ASSERT_EQ (again.size (), before.size () + 1);
+    EXPECT_EQ (again.back ().type, "account");
+    EXPECT_NE (again.back ().text.find ("Bankkonto"), std::string::npos);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_P (SeFileTest, the_history_can_be_put_back_into_the_book)
+{
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
+    auto before {gnc_se_book_get_history (m_book)};
+    ASSERT_FALSE (before.empty ());
+
+    gnc_se_history_to_book (m_book);
+
+    EXPECT_EQ (gnc_se_book_get_history_store (m_book), nullptr);
+    auto after {gnc_se_book_get_history (m_book)};
+    ASSERT_EQ (after.size (), before.size ());
+    EXPECT_EQ (after.back ().text, before.back ().text);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+/* A history that has lost an entry does not match the position that
+ * the book holds. */
+TEST_P (SeFileTest, a_history_cut_short_is_found)
+{
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
+    ASSERT_TRUE (gnc_se_verify (m_book).empty ());
+
+    /* As if the last entry had been removed from where it is stored:
+     * the book expects one more than there is. */
+    auto next {qof_instance_get_path_kvp<int64_t> (QOF_INSTANCE (m_book),
+                                                   {"se-history:next"})};
+    ASSERT_TRUE (next.has_value ());
+    qof_instance_set_path_kvp<int64_t> (QOF_INSTANCE (m_book), *next + 1,
+                                        {"se-history:next"});
+    auto types {issue_types ()};
+    EXPECT_NE (std::find (types.begin (), types.end (),
+                          GncSeIssueType::HISTORY_CHANGED), types.end ());
+}
+
+/* Between begin and rollback nothing reaches the storage. */
+TEST_P (SeFileTest, a_command_is_stored_as_a_whole_or_not_at_all)
+{
+    bool sql {std::string {GetParam ()} != "xml"};
+    add_january ();
+    ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
+    auto count {[this] {
+        return qof_collection_count (
+            qof_book_get_collection (m_book, GNC_ID_TRANS));
+    }};
+    ASSERT_EQ (count (), 3u);
+    m_sek = gnc_commodity_table_lookup (
+        gnc_commodity_table_get_table (m_book), GNC_COMMODITY_NS_CURRENCY, "SEK");
+    auto root {gnc_book_get_root_account (m_book)};
+    m_bank = gnc_account_lookup_by_code (root, "1930");
+    m_sales = gnc_account_lookup_by_code (root, "3001");
+    ASSERT_NE (m_bank, nullptr);
+    ASSERT_NE (m_sales, nullptr);
+
+    ASSERT_TRUE (gnc_se_command_begin (m_book));
+    add (date (2025, 2, 3), 4000, "Kept", 40000, m_bank, m_sales);
+    add (date (2025, 2, 4), 5000, "Kept too", 50000, m_bank, m_sales);
+    ASSERT_TRUE (gnc_se_command_commit (m_book));
+
+    ASSERT_TRUE (gnc_se_command_begin (m_book));
+    add (date (2025, 2, 5), 6000, "Undone", 60000, m_bank, m_sales);
+    ASSERT_TRUE (gnc_se_command_rollback (m_book));
+
+    /* What is in memory is no longer what is stored: read it again,
+     * without saving first. */
+    qof_session_end (m_session);
+    qof_session_destroy (m_session);
+    m_session = qof_session_new (qof_book_new ());
+    qof_session_begin (m_session, m_url.c_str (), SESSION_NORMAL_OPEN);
+    ASSERT_EQ (qof_session_get_error (m_session), ERR_BACKEND_NO_ERR);
+    qof_session_load (m_session, nullptr);
+    ASSERT_EQ (qof_session_get_error (m_session), ERR_BACKEND_NO_ERR);
+    m_book = qof_session_get_book (m_session);
+
+    /* XML stores nothing until the whole file is saved. */
+    EXPECT_EQ (count (), sql ? 5u : 3u);
+}
+
 INSTANTIATE_TEST_SUITE_P (Backends, SeFileTest,
                           ::testing::Values ("xml", "sqlite3"));

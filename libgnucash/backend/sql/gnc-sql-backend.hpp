@@ -118,6 +118,10 @@ public:
     GncSqlResultPtr execute_select_statement(const GncSqlStatementPtr& stmt) const noexcept;
     int execute_nonselect_statement(const GncSqlStatementPtr& stmt) const noexcept;
     std::string quote_string(const std::string&) const noexcept;
+    /* GnuCash SE: one unit of work around several commits (design 06). */
+    bool begin_transaction() noexcept;
+    bool commit_transaction() noexcept;
+    bool rollback_transaction() noexcept;
     /**
      * Creates a table in the database
      *
