@@ -2470,7 +2470,10 @@ gnc_se_book_set_history_store (QofBook* book,
          * saves or loads the book, and it writes the book itself. */
         for (const auto& stored : events)
         {
-            store->append (stored);
+            /* The store may already have it: a book whose history was
+             * moved but which was not saved afterwards. */
+            if (!store->event (stored.event.number))
+                store->append (stored);
             delete_slot_event (book, stored.event.number);
         }
         for (auto kind : {"account", "tax-table"})

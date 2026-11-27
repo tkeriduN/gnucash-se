@@ -45,6 +45,9 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <random>
 #include <string>
 #include <vector>
@@ -374,6 +377,12 @@ measure (const Options& options)
         return 1;
     auto loaded {seconds_since (start)};
     auto after {memory ()};
+    /* Loading frees much of what it allocates (the rows it read), but
+     * the allocator keeps the memory. A server gives it back once. */
+#ifdef __GLIBC__
+    malloc_trim (0);
+#endif
+    auto trimmed {memory ()};
 
     auto book {qof_session_get_book (session)};
     auto root {gnc_book_get_root_account (book)};
@@ -405,8 +414,9 @@ measure (const Options& options)
                      qof_book_get_collection (book, GNC_ID_SPLIT)),
                  gnc_se_book_get_history (book).size ());
     std::printf ("load: %.2f s; memory %.0f MB after load (%.0f MB before), "
-                 "peak %.0f MB\n\n",
-                 loaded, after.now_mb, before.now_mb, after.peak_mb);
+                 "%.0f MB after giving freed memory back, peak %.0f MB\n\n",
+                 loaded, after.now_mb, before.now_mb, trimmed.now_mb,
+                 after.peak_mb);
     if (options.load_only)
     {
         qof_session_end (session);
@@ -468,9 +478,10 @@ measure (const Options& options)
     }
     timings.push_back (rename);
 
-    Timing lock {"lock four weeks (" + std::to_string (added.size ()) +
-                     " transactions)",
-                 {}};
+    /* Four weeks on from the lock date: what was just added, and what
+     * "generate" left open in those weeks. */
+    Timing lock {"lock four weeks", {}};
+    int locked = 0;
     {
         auto through {*lock_date};
         g_date_add_days (&through, 28);
@@ -480,6 +491,7 @@ measure (const Options& options)
         if (!result.ok)
             std::fprintf (stderr, "gcse-bench: lock: %s\n",
                           result.error.c_str ());
+        locked = result.locked;
     }
     timings.push_back (lock);
 
@@ -572,8 +584,10 @@ measure (const Options& options)
     std::printf ("|---|---|---|---|---|\n");
     for (const auto& timing : timings)
         print_timing (timing);
-    std::printf ("\nledger rows %zu, voucher rows %zu, issues from verify %zu, "
-                 "memory now %.0f MB, peak %.0f MB\n",
+    std::printf ("\nthe lock posted %d transactions (%.2f ms each), ledger "
+                 "rows %zu, voucher rows %zu, issues from verify %zu, memory "
+                 "now %.0f MB, peak %.0f MB\n",
+                 locked, locked > 0 ? lock.ms.front () / locked : 0.0,
                  ledger_rows, voucher_rows, issues, memory ().now_mb,
                  memory ().peak_mb);
 

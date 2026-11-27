@@ -9,7 +9,15 @@
 #
 # Storlekar:
 #   small   1 300 konton, 1 år, 2 000 verifikationer
-#   full    1 300 konton, 5 år, 50 000 verifikationer (måttet för kontrollpunkten)
+#   medium  1 300 konton, 5 år, 10 000 verifikationer (gränserna vid kontrollpunkten gäller här)
+#   full    1 300 konton, 5 år, 50 000 verifikationer (den stora boken)
+#
+# Mät i ett optimerat bygge, som en server körs. Standardbygget i .build/future har ingen
+# byggtyp och därmed ingen optimering:
+#   mkdir -p .build/release
+#   FUTURE_BUILD=release util/se/future-env cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo ../..
+#   FUTURE_BUILD=release util/se/future-env ninja -j4
+#   FUTURE_BUILD=release util/se/future-env ../../util/se/pg-env ../../util/se/bench-all medium
 # BENCH_OPS anger hur många gånger varje skrivning upprepas (standard 30).
 # BENCH_BACKENDS väljer lagring, t.ex. "sqlite3 postgres" (standard: alla tre).
 set -eu
@@ -17,13 +25,16 @@ set -eu
 size=${1:-full}
 case "$size" in
     small) gen="--accounts=1300 --years=1 --per-year=2000" ;;
+    medium) gen="--accounts=1300 --years=5 --per-year=2000" ;;
     full)  gen="--accounts=1300 --years=5 --per-year=10000" ;;
-    *) echo "bench-all: okänd storlek $size (small eller full)" >&2; exit 2 ;;
+    *) echo "bench-all: okänd storlek $size (small, medium eller full)" >&2; exit 2 ;;
 esac
 ops=${BENCH_OPS:-30}
 backends=${BENCH_BACKENDS:-xml sqlite3 postgres}
 
 [ -x bin/gcse-bench ] || { echo "bench-all: bin/gcse-bench saknas; kör från byggkatalogen" >&2; exit 1; }
+echo "byggtyp: $(sed -n 's/^CMAKE_BUILD_TYPE:STRING=//p' CMakeCache.txt | sed 's/^$/(ingen: ooptimerat)/')"
+echo
 export GNC_UNINSTALLED=YES GNC_BUILDDIR="$PWD"
 
 dir=$(mktemp -d /tmp/gcse-bench.XXXXXX)

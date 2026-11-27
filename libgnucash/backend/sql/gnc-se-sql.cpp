@@ -343,11 +343,19 @@ GncSqlSeHistoryBackend::load_all (GncSqlBackend* sql_be)
     auto book {sql_be->book ()};
     if (!book)
         return;
-    /* A database that GnuCash SE has not saved to has no tables, and its
-     * book keeps whatever history it has in its slots. */
+    /* A database that GnuCash SE has not saved to has no tables. It
+     * gets them now, unless it is only being read; then the book keeps
+     * whatever history it has in its slots. */
     if (sql_be->get_table_version (EVENTS_TABLE) == 0 ||
         sql_be->get_table_version (WATCHED_TABLE) == 0)
-        return;
+    {
+        if (qof_book_is_readonly (book))
+            return;
+        create_tables (sql_be);
+        if (sql_be->get_table_version (EVENTS_TABLE) == 0 ||
+            sql_be->get_table_version (WATCHED_TABLE) == 0)
+            return;
+    }
     auto store {std::make_shared<SqlHistoryStore> (sql_be)};
     if (!store->read_all ())
         return;
