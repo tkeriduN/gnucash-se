@@ -15,6 +15,8 @@ Filer i `util/se/`:
 |---|---|
 | `containers/future-ubuntu2604/Containerfile` | image med samma paket som upstreams CI-jobb "Ubuntu-26.04 CI Tests" |
 | `future-env` | kör ett kommando i containern med repots rot monterad på samma sökväg som på värden |
+| `pg-env` | körs inne i containern: startar en tillfällig PostgreSQL-server och kör sedan kommandot |
+| `bench-all` | körs inne i containern: mäter motorn med en genererad bok mot XML, SQLite och PostgreSQL |
 
 `future-env` kör utan nätverk, med 4 processorer och `nice -n 19`. Arbetskatalogen är `.build/future`
 (annan katalog under `.build/` med `FUTURE_BUILD`). Rotlös podman: root i containern motsvarar den egna
@@ -37,6 +39,8 @@ Versioner i imagen (2026-11-24) mot kraven i `README.dependencies` på `future`:
 
 Flera ligger exakt på minimikravet. Höjer upstream kraven behöver imagen byggas om, eller byta bas.
 Imagen innehåller fortfarande GTK och WebKit, eftersom den också används för det fullständiga bygget nedan.
+Utöver upstreams paket har den PostgreSQL 18 och `libdbd-pgsql` (eget lager i Containerfile, tillagt
+2026-11-27). Bygg om imagen med kommandot nedan när Containerfile ändras.
 
 ## Kommandon
 
@@ -54,6 +58,22 @@ mkdir -p .build/future && cd .build/future
 ```
 
 Utvecklingsservern delas med produktionssiter: högst 4 jobb och ett bygge i taget.
+
+### PostgreSQL och mätning
+
+`pg-env` ger kommandot en tom PostgreSQL-server som försvinner med containern, och sätter `GCSE_PG_URL` och
+`TEST_PGSQL_URL`. Med den senare kör upstreams `test-backend-dbi` också sina sex PostgreSQL-fall.
+
+```sh
+cd .build/future
+../../util/se/future-env ../../util/se/pg-env ctest -R test-backend-dbi --output-on-failure
+../../util/se/future-env ../../util/se/pg-env ../../util/se/bench-all small    # ca 1 min
+../../util/se/future-env ../../util/se/pg-env ../../util/se/bench-all full     # ca 25 min
+```
+
+Mätprogrammet är `bin/gcse-bench` (`se/tools/gcse-bench.cpp`); resultat och tolkning står i
+[`design/05-serverarkitektur.md`](design/05-serverarkitektur.md). Mätningen är inget bygge, men den belastar
+en kärna och disken i många minuter: kör den inte samtidigt som ett bygge.
 
 ### Hela GnuCash med GTK (bara vid synk)
 
@@ -89,7 +109,8 @@ utvecklingsservern, bygge från tom katalog:
 - De 50 tester som försvann med GTK-programmet: rapporterna 31, import-export 13, GTK-lagret 6. Rapporttesterna
   körde hela motorn och fångade därför en del som motorns egna tester inte gör; det fullständiga bygget på
   synkgrenarna (ovan) kör dem fortfarande.
-- **Inte prövat lokalt:** bygget utan GTK på macOS och Windows. Det visar CI först när grenen är pushad.
+- Bygget utan GTK är grönt i CI på macOS och Windows (grenen `chore/drop-gtk-build`, 2026-11-27).
+- Med mätverktyget från steg 1 tillkommer `test-gcse-bench` (bara på Linux): **92 av 92**.
 
 ### Med GTK (till och med 2026-11-27)
 
@@ -104,6 +125,8 @@ utvecklingsservern, bygge från tom katalog:
 - Det fullständiga bygget med GTK kör AqBanking-testerna, som lämnar en transaktionslogg i **källträdet**
   (`gnucash/import-export/aqb/test/file-book-hbcislot.gnucash.<tid>.log`). Ta bort den efter testkörningen;
   committa den inte. Bygget utan GTK lämnar inget i källträdet utom `po/POTFILES.in`, som cmake skriver om.
+- `test-backend-dbi` med PostgreSQL (genom `pg-env`) lämnar på samma sätt
+  `libgnucash/backend/dbi/test/test-dbi.xml.<tid>.log` i källträdet. Ta bort dem.
 - Testerna skapar tomma kataloger under `~/.local/share/gnucash/` och `~/.config/gnucash/`.
 - `ninja distcheck` går inte utan GTK-programmet (`common/cmake_modules/MakeDist.cmake`), och är därför utbytt
   mot `ninja check` i CI. Källtarboll görs inte från forken i dag.
