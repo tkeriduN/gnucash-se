@@ -465,6 +465,18 @@ std::shared_ptr<GncSeHistoryStore> gnc_se_book_get_history_store (
 void gnc_se_history_to_book (QofBook* book);
 /** @} */
 
+/** @name Who is acting
+ *
+ * The server sets this before each command, to the user who is logged
+ * in; there is one book and one engine thread in a process. Entries in
+ * the processing history that are not given a signature of their own
+ * (changed accounts, tax tables, settings and fiscal years) get it.
+ * Empty until it is set, and then those entries have no signature.
+ @{ */
+void gnc_se_set_actor (const std::string& actor);
+const std::string& gnc_se_get_actor ();
+/** @} */
+
 /** @name One unit of work in the storage
  *
  * The engine saves each object on its own. Between gnc_se_command_begin()

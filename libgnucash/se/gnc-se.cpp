@@ -158,6 +158,21 @@ set_guid (QofInstance* instance, const Path& path, const GncGUID* guid)
 
 namespace
 {
+/* Makes everything that is saved while it lives one unit in the book's
+ * storage (design 06). What has been done in memory cannot be undone,
+ * so the unit is always kept, also when the work ends early. */
+struct Command
+{
+    QofBook* m_book;
+    explicit Command (QofBook* book) : m_book {book}
+    {
+        gnc_se_command_begin (m_book);
+    }
+    ~Command () { gnc_se_command_commit (m_book); }
+    Command (const Command&) = delete;
+    Command& operator= (const Command&) = delete;
+};
+
 /* Keeps the book open for editing for as long as it lives. */
 struct BookEdit
 {
@@ -1035,6 +1050,9 @@ chain_next (const std::string& previous, const Transaction* trans)
 /* True while gnc_se_lock_through() locks transactions. */
 static bool lock_in_progress = false;
 
+/* Who is acting; see gnc_se_set_actor(). */
+static std::string current_actor;
+
 /* --- The transactions that are not posted ------------------------------
  *
  * Locking, and the check of what is overdue, need the transactions that
@@ -1344,6 +1362,7 @@ gnc_se_correct (Transaction* original, const GDate& date,
         return GncSeCorrection {false, error, nullptr, nullptr};
     };
     g_return_val_if_fail (original, fail ("No transaction."));
+    Command command {xaccTransGetBook (original)};
 
     if (!gnc_se_trans_is_locked (original))
         return fail (_("Only a posted transaction is corrected with a "
@@ -1693,6 +1712,7 @@ gnc_se_lock_through (QofBook* book, const GDate& date,
 {
     g_return_val_if_fail (book, lock_error ("No book."));
 
+    Command command {book};
     /* What has happened to the accounts is recorded before the lock is. */
     gnc_se_history_sync (book);
 
@@ -1804,6 +1824,7 @@ gnc_se_close_fiscal_year (QofBook* book, const GDate& date,
                           const std::string& signature)
 {
     g_return_val_if_fail (book, lock_error ("No book."));
+    Command command {book};
     if (!g_date_valid (&date))
         return lock_error ("%s", _("The date is not valid."));
     auto who {trimmed (signature)};
@@ -2099,7 +2120,8 @@ write_event (QofBook* book, const char* type, const std::string& signature,
     if (previous.empty ())
         previous = history_chain_start (book);
 
-    GncSeEvent event {number, gnc_time (nullptr), type, signature, text};
+    GncSeEvent event {number, gnc_time (nullptr), type,
+                      signature.empty () ? current_actor : signature, text};
     GncSeStoredEvent stored {event, history_chain_next (previous, event)};
     if (auto store {store_of (book)})
         store->append (stored);
@@ -2480,6 +2502,18 @@ gnc_se_history_to_book (QofBook* book)
                 set_slot_watched (book, kind, key, *watched);
     qof_instance_set_dirty (inst (book));
     attach_store (book, nullptr);
+}
+
+void
+gnc_se_set_actor (const std::string& actor)
+{
+    current_actor = trimmed (actor);
+}
+
+const std::string&
+gnc_se_get_actor ()
+{
+    return current_actor;
 }
 
 bool

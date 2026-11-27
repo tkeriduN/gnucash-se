@@ -1669,6 +1669,33 @@ TEST_F (SeTest, the_register_of_unposted_transactions_keeps_up)
     EXPECT_TRUE (gnc_se_verify (m_book).empty ());
 }
 
+/* Design 06: whoever is acting signs what has no signature of its own. */
+TEST_F (SeTest, the_actor_signs_entries_without_a_signature)
+{
+    add_january ();
+    gnc_se_set_actor ("  anna  ");
+    EXPECT_EQ (gnc_se_get_actor (), "anna");
+    ASSERT_TRUE (gnc_se_lock_through (m_book, date (2025, 1, 31), "IA").ok);
+    xaccAccountBeginEdit (m_costs);
+    xaccAccountSetName (m_costs, "Hyra");
+    xaccAccountCommitEdit (m_costs);
+    gnc_se_set_actor ("");
+
+    xaccAccountBeginEdit (m_costs);
+    xaccAccountSetName (m_costs, "Lokalhyra");
+    xaccAccountCommitEdit (m_costs);
+
+    auto history {gnc_se_book_get_history (m_book)};
+    ASSERT_GE (history.size (), 4u);
+    EXPECT_EQ (history[history.size () - 3].type, "lock");
+    EXPECT_EQ (history[history.size () - 3].signature, "IA");
+    EXPECT_EQ (history[history.size () - 2].type, "account");
+    EXPECT_EQ (history[history.size () - 2].signature, "anna");
+    EXPECT_EQ (history.back ().type, "account");
+    EXPECT_EQ (history.back ().signature, "");
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
 /* ------------------------------------------------------------------ */
 /* Saved and read again                                               */
 
