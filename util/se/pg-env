@@ -16,6 +16,8 @@
 #
 # Miljövariabler in:
 #   PG_FSYNC        "off" stänger av fsync (snabbare, men mäter inte varaktig skrivning)
+#   PG_OPTIONS      fler serverinställningar, t.ex. "-c log_statement=all -c log_duration=on"
+#                   (loggen ligger i $PG_ENV_LOG medan kommandot kör)
 set -eu
 
 [ $# -gt 0 ] || { echo "pg-env: inget kommando angivet" >&2; exit 2; }
@@ -36,7 +38,7 @@ trap stop EXIT INT TERM
 
 as_pg "$pgbin/initdb" -D "$data" -A trust -U postgres -E UTF8 --locale=C.UTF-8 >/dev/null
 as_pg "$pgbin/pg_ctl" -D "$data" -w -l "$data/server.log" \
-    -o "-c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp -c fsync=${PG_FSYNC:-on}" \
+    -o "-c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp -c fsync=${PG_FSYNC:-on} ${PG_OPTIONS:-}" \
     start >/dev/null ||
     { cat "$data/server.log" >&2; exit 1; }
 
@@ -46,7 +48,8 @@ psql -q -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
 
 GCSE_PG_URL="postgres://gnc:gnc@127.0.0.1"
 TEST_PGSQL_URL="$GCSE_PG_URL/gnctest"
-export GCSE_PG_URL TEST_PGSQL_URL
+PG_ENV_LOG="$data/server.log"
+export GCSE_PG_URL TEST_PGSQL_URL PG_ENV_LOG
 
 set +e
 "$@"

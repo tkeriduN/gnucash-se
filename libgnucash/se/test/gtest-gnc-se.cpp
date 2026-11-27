@@ -64,7 +64,8 @@ static std::string
 slot (const Transaction* trans, const char* key)
 {
     auto value {qof_instance_get_path_kvp<const char*> (
-            QOF_INSTANCE (const_cast<Transaction*> (trans)), {"se", key})};
+            QOF_INSTANCE (const_cast<Transaction*> (trans)),
+            {std::string {"se-"} + key})};
     return value && *value ? *value : "";
 }
 
@@ -491,7 +492,7 @@ TEST_F (SeTest, a_locked_transaction_cannot_be_deleted_or_unlocked)
     /* The lock itself. */
     xaccTransBeginEdit (m_first);
     qof_instance_set_path_kvp<int64_t> (QOF_INSTANCE (m_first), 7,
-                                        {"se", "number"});
+                                        {"se-number"});
     xaccTransCommitEdit (m_first);
     EXPECT_EQ (gnc_se_trans_get_number (m_first), 1);
 
@@ -750,7 +751,7 @@ TEST_F (SeTest, a_number_cannot_be_set_from_outside)
     add_january ();
     xaccTransBeginEdit (m_first);
     qof_instance_set_path_kvp<int64_t> (QOF_INSTANCE (m_first), 1,
-                                        {"se", "number"});
+                                        {"se-number"});
     xaccTransCommitEdit (m_first);
 
     EXPECT_FALSE (gnc_se_trans_is_locked (m_first));
@@ -922,19 +923,19 @@ TEST_F (SeCorrectionTest, posting_the_correcting_entry_marks_the_original)
     xaccTransBeginEdit (correction);
     qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (correction),
                                             g_strdup ("XX"),
-                                            {"se", "signature"});
+                                            {"se-signature"});
     xaccTransCommitEdit (correction);
     EXPECT_EQ (gnc_se_trans_get_signature (correction), "IA");
     xaccTransBeginEdit (correction);
     qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (correction),
                                             g_strdup ("Another reason"),
-                                            {"se", "reason"});
+                                            {"se-reason"});
     xaccTransCommitEdit (correction);
     EXPECT_EQ (gnc_se_trans_get_reason (correction), "Wrong amount");
     xaccTransBeginEdit (correction);
     qof_instance_set_path_kvp<GncGUID*> (
         QOF_INSTANCE (correction), guid_copy (xaccTransGetGUID (m_second)),
-        {"se", "corrects"});
+        {"se-corrects"});
     xaccTransCommitEdit (correction);
     EXPECT_EQ (gnc_se_trans_get_corrected (correction), m_first);
     xaccTransDestroy (correction);
@@ -961,7 +962,7 @@ TEST_F (SeCorrectionTest, a_signature_changed_outside_is_found)
     gnc_se_shutdown (); /* As in plain GnuCash. */
     qof_instance_set_path_kvp<const char*> (QOF_INSTANCE (result.correction),
                                             g_strdup ("XX"),
-                                            {"se", "signature"});
+                                            {"se-signature"});
     auto issues {gnc_se_verify (m_book)};
     ASSERT_EQ (issues.size (), 1u);
     EXPECT_EQ (issues[0].type, GncSeIssueType::CHANGED);
@@ -1173,7 +1174,7 @@ TEST_F (SeTest, a_transaction_numbered_in_the_wrong_year_is_found)
 
     /* The year is cut short behind the back of GnuCash SE. */
     qof_instance_set_path_kvp<GDate> (QOF_INSTANCE (m_book), date (2025, 1, 12),
-                                      {"se", "fiscal-years", "2025", "end"});
+                                      {"se-fiscal-years:2025:end"});
     auto types {issue_types ()};
     EXPECT_EQ (std::count (types.begin (), types.end (),
                            GncSeIssueType::PERIOD_MISMATCH), 2);
@@ -1399,7 +1400,7 @@ TEST_F (SeHistoryTest, a_changed_history_is_found)
     ASSERT_TRUE (gnc_se_verify (m_book).empty ());
     qof_instance_set_path_kvp<const char*> (
         QOF_INSTANCE (m_book), g_strdup ("Nothing happened."),
-        {"se", "history", "events", "2", "text"});
+        {"se-history:events:2:text"});
     auto issues {gnc_se_verify (m_book)};
     ASSERT_EQ (issues.size (), 1u);
     EXPECT_EQ (issues[0].type, GncSeIssueType::HISTORY_CHANGED);
@@ -1536,7 +1537,7 @@ TEST_F (SeVerifyTest, a_new_transaction_in_the_locked_period_is_found)
 TEST_F (SeVerifyTest, a_copied_number_is_found)
 {
     qof_instance_set_path_kvp<int64_t> (QOF_INSTANCE (m_third), 2,
-                                        {"se", "number"});
+                                        {"se-number"});
     auto types {issue_types ()};
     EXPECT_NE (std::find (types.begin (), types.end (),
                           GncSeIssueType::DUPLICATE_NUMBER), types.end ());
@@ -1547,7 +1548,7 @@ TEST_F (SeVerifyTest, a_copied_number_is_found)
 TEST_F (SeVerifyTest, a_lock_date_moved_back_is_found)
 {
     qof_instance_set_path_kvp<GDate> (QOF_INSTANCE (m_book), date (2025, 1, 12),
-                                      {"se", "lock-date"});
+                                      {"se-lock-date"});
     auto issues {gnc_se_verify (m_book)};
     ASSERT_EQ (issues.size (), 2u); /* dated 15 and 20 January */
     EXPECT_EQ (issues[0].type, GncSeIssueType::LOCKED_AFTER_LOCK_DATE);
@@ -1580,6 +1581,118 @@ TEST_F (SeTest, the_hash_of_a_transaction_is_stable)
      * docs/design/01-las-och-numrering.md, section 6.3. */
     EXPECT_EQ (slot (trans, "hash"),
                "75fa10fea9c39a141128a8e0565d7e13135240d701dc648adbbe202ba2f5e730");
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+/* ------------------------------------------------------------------ */
+/* The order of entry and the register of unposted transactions       */
+
+static int64_t
+seq (const Transaction* trans)
+{
+    auto value {qof_instance_get_path_kvp<int64_t> (
+            QOF_INSTANCE (const_cast<Transaction*> (trans)), {"se-seq"})};
+    return value ? *value : 0;
+}
+
+/* Design 06: the order is the order in which the transactions were
+ * first saved, whatever the clock said. */
+TEST_F (SeTest, vouchers_are_numbered_in_the_order_they_were_saved)
+{
+    /* All three in the same second, and the last one claiming to be the
+     * earliest. */
+    auto a {add (date (2025, 1, 20), 5000, "Saved first", 10000, m_bank, m_sales)};
+    auto b {add (date (2025, 1, 10), 5000, "Saved second", 20000, m_bank, m_sales)};
+    auto c {add (date (2025, 1, 15), 4000, "Saved third", 30000, m_bank, m_sales)};
+    EXPECT_LT (seq (a), seq (b));
+    EXPECT_LT (seq (b), seq (c));
+
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    EXPECT_EQ (gnc_se_trans_get_voucher (a), "A 1");
+    EXPECT_EQ (gnc_se_trans_get_voucher (b), "A 2");
+    EXPECT_EQ (gnc_se_trans_get_voucher (c), "A 3");
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+/* A transaction that was not made in GnuCash SE has no place in the
+ * order; it comes first, by the time it says it was entered. */
+TEST_F (SeTest, transactions_without_a_place_in_the_order_come_first)
+{
+    auto a {add (date (2025, 1, 20), 1000, "Ours", 10000, m_bank, m_sales)};
+    auto late {add (date (2025, 1, 10), 3000, "Foreign, later", 20000, m_bank,
+                    m_sales)};
+    auto early {add (date (2025, 1, 15), 2000, "Foreign, earlier", 30000,
+                     m_bank, m_sales)};
+    for (auto trans : {late, early})
+    {
+        xaccTransBeginEdit (trans);
+        qof_instance_slot_path_delete (QOF_INSTANCE (trans), {"se-seq"});
+        xaccTransCommitEdit (trans);
+        ASSERT_EQ (seq (trans), 0);
+    }
+
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    EXPECT_EQ (gnc_se_trans_get_voucher (early), "A 1");
+    EXPECT_EQ (gnc_se_trans_get_voucher (late), "A 2");
+    EXPECT_EQ (gnc_se_trans_get_voucher (a), "A 3");
+}
+
+/* The register follows what is added, deleted and posted between locks. */
+TEST_F (SeTest, the_register_of_unposted_transactions_keeps_up)
+{
+    add_january ();
+    ASSERT_EQ (lock (date (2025, 1, 31)).locked, 3);
+
+    auto kept {add (date (2025, 2, 3), 4000, "Kept", 40000, m_bank, m_sales)};
+    auto deleted {add (date (2025, 2, 4), 5000, "Deleted", 50000, m_bank,
+                       m_sales)};
+    auto later {add (date (2025, 3, 3), 6000, "In March", 60000, m_bank,
+                     m_sales)};
+    xaccTransBeginEdit (deleted);
+    xaccTransDestroy (deleted);
+    xaccTransCommitEdit (deleted);
+
+    auto plan {gnc_se_plan_lock (m_book, date (2025, 2, 28))};
+    ASSERT_TRUE (plan.ok);
+    EXPECT_EQ (plan.total, 1);
+    ASSERT_EQ (lock (date (2025, 2, 28)).locked, 1);
+    EXPECT_EQ (gnc_se_trans_get_voucher (kept), "A 4");
+    EXPECT_FALSE (gnc_se_trans_is_locked (later));
+
+    /* Changing an unposted transaction does not put it there twice. */
+    xaccTransBeginEdit (later);
+    xaccTransSetDescription (later, "Still in March");
+    xaccTransCommitEdit (later);
+    ASSERT_EQ (lock (date (2025, 3, 31)).locked, 1);
+    EXPECT_EQ (gnc_se_trans_get_voucher (later), "A 5");
+    ASSERT_EQ (lock (date (2025, 4, 30)).locked, 0);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+/* Design 06: whoever is acting signs what has no signature of its own. */
+TEST_F (SeTest, the_actor_signs_entries_without_a_signature)
+{
+    add_january ();
+    gnc_se_set_actor ("  anna  ");
+    EXPECT_EQ (gnc_se_get_actor (), "anna");
+    ASSERT_TRUE (gnc_se_lock_through (m_book, date (2025, 1, 31), "IA").ok);
+    xaccAccountBeginEdit (m_costs);
+    xaccAccountSetName (m_costs, "Hyra");
+    xaccAccountCommitEdit (m_costs);
+    gnc_se_set_actor ("");
+
+    xaccAccountBeginEdit (m_costs);
+    xaccAccountSetName (m_costs, "Lokalhyra");
+    xaccAccountCommitEdit (m_costs);
+
+    auto history {gnc_se_book_get_history (m_book)};
+    ASSERT_GE (history.size (), 4u);
+    EXPECT_EQ (history[history.size () - 3].type, "lock");
+    EXPECT_EQ (history[history.size () - 3].signature, "IA");
+    EXPECT_EQ (history[history.size () - 2].type, "account");
+    EXPECT_EQ (history[history.size () - 2].signature, "anna");
+    EXPECT_EQ (history.back ().type, "account");
+    EXPECT_EQ (history.back ().signature, "");
     EXPECT_TRUE (gnc_se_verify (m_book).empty ());
 }
 
@@ -1724,6 +1837,17 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
     auto preliminary {xaccTransLookup (&february_guid, m_book)};
     ASSERT_NE (preliminary, nullptr);
     EXPECT_FALSE (gnc_se_trans_is_locked (preliminary));
+    /* So does the order of entry: what is saved now comes after
+     * everything that was read. */
+    auto root {gnc_book_get_root_account (m_book)};
+    m_sek = gnc_commodity_table_lookup (
+        gnc_commodity_table_get_table (m_book), GNC_COMMODITY_NS_CURRENCY, "SEK");
+    auto newest {add (date (2025, 2, 20), 1, "After the load", 100,
+                      gnc_account_lookup_by_code (root, "1930"),
+                      gnc_account_lookup_by_code (root, "3001"))};
+    EXPECT_GT (seq (preliminary), 0);
+    EXPECT_GT (seq (newest), seq (preliminary));
+    EXPECT_GT (seq (newest), seq (first));
     /* The correcting entry and its links came back as well. */
     auto second {xaccTransLookup (&second_guid, m_book)};
     auto correction {xaccTransLookup (&correction_guid, m_book)};
@@ -1750,6 +1874,146 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
     ASSERT_NE (correction, nullptr);
     EXPECT_EQ (gnc_se_trans_get_signature (correction), "IA");
     EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+/* Design 06: with a backend that stores every slot as a row, the
+ * processing history is kept in tables of its own, and only the
+ * position in the chain stays in the book. */
+TEST_P (SeFileTest, the_history_is_stored_where_the_backend_keeps_it)
+{
+    bool sql {std::string {GetParam ()} != "xml"};
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    xaccAccountBeginEdit (m_costs);
+    xaccAccountSetName (m_costs, "Hyra");
+    xaccAccountCommitEdit (m_costs);
+    auto before {gnc_se_book_get_history (m_book)};
+    ASSERT_GE (before.size (), 3u);
+    EXPECT_EQ (before.back ().type, "account");
+
+    ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
+
+    EXPECT_EQ (gnc_se_book_get_history_store (m_book) != nullptr, sql);
+    size_t in_slots = 0;
+    for (const auto& key : qof_instance_get_slots (QOF_INSTANCE (m_book))->get_keys ())
+        if (key.starts_with ("se-history:events:") ||
+            key.starts_with ("se-history:account:"))
+            ++in_slots;
+    if (sql)
+        EXPECT_EQ (in_slots, 0u);
+    else
+        EXPECT_GT (in_slots, 0u);
+
+    auto after {gnc_se_book_get_history (m_book)};
+    ASSERT_EQ (after.size (), before.size ());
+    for (size_t i = 0; i < before.size (); ++i)
+    {
+        EXPECT_EQ (after[i].number, before[i].number);
+        EXPECT_EQ (after[i].time, before[i].time);
+        EXPECT_EQ (after[i].type, before[i].type);
+        EXPECT_EQ (after[i].signature, before[i].signature);
+        EXPECT_EQ (after[i].text, before[i].text);
+    }
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+    gnc_se_history_sync (m_book); /* Nothing has changed since. */
+    EXPECT_EQ (gnc_se_book_get_history (m_book).size (), before.size ());
+
+    /* What happens from here on is stored as it happens. */
+    auto bank {gnc_account_lookup_by_code (gnc_book_get_root_account (m_book),
+                                           "1930")};
+    ASSERT_NE (bank, nullptr);
+    xaccAccountBeginEdit (bank);
+    xaccAccountSetName (bank, "Bankkonto");
+    xaccAccountCommitEdit (bank);
+    ASSERT_EQ (gnc_se_book_get_history (m_book).size (), before.size () + 1);
+
+    ASSERT_NO_FATAL_FAILURE (reopen ());
+    auto again {gnc_se_book_get_history (m_book)};
+    ASSERT_EQ (again.size (), before.size () + 1);
+    EXPECT_EQ (again.back ().type, "account");
+    EXPECT_NE (again.back ().text.find ("Bankkonto"), std::string::npos);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+TEST_P (SeFileTest, the_history_can_be_put_back_into_the_book)
+{
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
+    auto before {gnc_se_book_get_history (m_book)};
+    ASSERT_FALSE (before.empty ());
+
+    gnc_se_history_to_book (m_book);
+
+    EXPECT_EQ (gnc_se_book_get_history_store (m_book), nullptr);
+    auto after {gnc_se_book_get_history (m_book)};
+    ASSERT_EQ (after.size (), before.size ());
+    EXPECT_EQ (after.back ().text, before.back ().text);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+/* A history that has lost an entry does not match the position that
+ * the book holds. */
+TEST_P (SeFileTest, a_history_cut_short_is_found)
+{
+    add_january ();
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
+    ASSERT_TRUE (gnc_se_verify (m_book).empty ());
+
+    /* As if the last entry had been removed from where it is stored:
+     * the book expects one more than there is. */
+    auto next {qof_instance_get_path_kvp<int64_t> (QOF_INSTANCE (m_book),
+                                                   {"se-history:next"})};
+    ASSERT_TRUE (next.has_value ());
+    qof_instance_set_path_kvp<int64_t> (QOF_INSTANCE (m_book), *next + 1,
+                                        {"se-history:next"});
+    auto types {issue_types ()};
+    EXPECT_NE (std::find (types.begin (), types.end (),
+                          GncSeIssueType::HISTORY_CHANGED), types.end ());
+}
+
+/* Between begin and rollback nothing reaches the storage. */
+TEST_P (SeFileTest, a_command_is_stored_as_a_whole_or_not_at_all)
+{
+    bool sql {std::string {GetParam ()} != "xml"};
+    add_january ();
+    ASSERT_NO_FATAL_FAILURE (save_and_reopen ());
+    auto count {[this] {
+        return qof_collection_count (
+            qof_book_get_collection (m_book, GNC_ID_TRANS));
+    }};
+    ASSERT_EQ (count (), 3u);
+    m_sek = gnc_commodity_table_lookup (
+        gnc_commodity_table_get_table (m_book), GNC_COMMODITY_NS_CURRENCY, "SEK");
+    auto root {gnc_book_get_root_account (m_book)};
+    m_bank = gnc_account_lookup_by_code (root, "1930");
+    m_sales = gnc_account_lookup_by_code (root, "3001");
+    ASSERT_NE (m_bank, nullptr);
+    ASSERT_NE (m_sales, nullptr);
+
+    ASSERT_TRUE (gnc_se_command_begin (m_book));
+    add (date (2025, 2, 3), 4000, "Kept", 40000, m_bank, m_sales);
+    add (date (2025, 2, 4), 5000, "Kept too", 50000, m_bank, m_sales);
+    ASSERT_TRUE (gnc_se_command_commit (m_book));
+
+    ASSERT_TRUE (gnc_se_command_begin (m_book));
+    add (date (2025, 2, 5), 6000, "Undone", 60000, m_bank, m_sales);
+    ASSERT_TRUE (gnc_se_command_rollback (m_book));
+
+    /* What is in memory is no longer what is stored: read it again,
+     * without saving first. */
+    qof_session_end (m_session);
+    qof_session_destroy (m_session);
+    m_session = qof_session_new (qof_book_new ());
+    qof_session_begin (m_session, m_url.c_str (), SESSION_NORMAL_OPEN);
+    ASSERT_EQ (qof_session_get_error (m_session), ERR_BACKEND_NO_ERR);
+    qof_session_load (m_session, nullptr);
+    ASSERT_EQ (qof_session_get_error (m_session), ERR_BACKEND_NO_ERR);
+    m_book = qof_session_get_book (m_session);
+
+    /* XML stores nothing until the whole file is saved. */
+    EXPECT_EQ (count (), sql ? 5u : 3u);
 }
 
 INSTANTIATE_TEST_SUITE_P (Backends, SeFileTest,

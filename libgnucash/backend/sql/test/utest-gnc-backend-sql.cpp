@@ -92,7 +92,7 @@ class GncMockSqlConnection : public GncSqlConnection
 {
 public:
     GncSqlResultPtr execute_select_statement (const GncSqlStatementPtr&)
-        noexcept override { return &m_result; }
+        noexcept override { return GncSqlResultPtr{new GncMockSqlResult}; } // GnuCash SE: the caller owns it
     int execute_nonselect_statement (const GncSqlStatementPtr&)
         noexcept override { return 1; }
     GncSqlStatementPtr create_statement_from_sql (const std::string&)
@@ -115,8 +115,6 @@ public:
     void set_error(QofBackendError error, unsigned int repeat, bool retry) noexcept override { return; }
     bool verify() noexcept override { return true; }
     bool retry_connection(const char* msg) noexcept override { return true; }
-private:
-    GncMockSqlResult m_result;
 };
 
 /* gnc_sql_init

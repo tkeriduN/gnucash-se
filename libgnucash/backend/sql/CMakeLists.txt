@@ -20,6 +20,7 @@ set (backend_sql_SOURCES
   gnc-price-sql.cpp
   gnc-recurrence-sql.cpp
   gnc-schedxaction-sql.cpp
+  gnc-se-sql.cpp
   gnc-slots-sql.cpp
   gnc-tax-table-sql.cpp
   gnc-transaction-sql.cpp
@@ -46,6 +47,7 @@ set (backend_sql_noinst_HEADERS
   gnc-price-sql.h
   gnc-recurrence-sql.h
   gnc-schedxaction-sql.h
+  gnc-se-sql.h
   gnc-slots-sql.h
   gnc-tax-table-sql.h
   gnc-transaction-sql.h

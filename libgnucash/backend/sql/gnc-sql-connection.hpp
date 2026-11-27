@@ -27,7 +27,7 @@
 #include <vector>
 
 class GncSqlResult;
-using GncSqlResultPtr = GncSqlResult*;
+using GncSqlResultPtr = std::unique_ptr<GncSqlResult>; // GnuCash SE: was a plain pointer that most callers never freed
 class GncSqlColumnTableEntry;
 using GncSqlColumnTableEntryPtr = std::shared_ptr<GncSqlColumnTableEntry>;
 using EntryVec = std::vector<GncSqlColumnTableEntryPtr>;

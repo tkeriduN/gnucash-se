@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -45,11 +46,13 @@
 
 static QofLogModule log_module = "gnc.se";
 
-/* Version of the "se" slots. */
-static const int64_t FORMAT_VERSION = 1;
+/* Version of GnuCash SE's slots. Version 2 has flat keys (design 06). */
+static const int64_t FORMAT_VERSION = 2;
 
-/* Everything GnuCash SE stores lives under this slot, on the book and
- * on each transaction. Described in docs/design/01-las-och-numrering.md. */
+/* The first element of every path that GnuCash SE stores under, on the
+ * book and on each transaction. The paths are described in
+ * docs/design/01-las-och-numrering.md; how they are stored, in
+ * docs/design/06-motorn-for-server.md. */
 static const char* SE = "se";
 
 static const char* DEFAULT_SERIES = "A";
@@ -75,17 +78,53 @@ inst (const Transaction* trans)
     return QOF_INSTANCE (const_cast<Transaction*> (trans));
 }
 
+/* The SQL backend stores every nested frame as a group of rows of its
+ * own, read with one query per frame and deleted with two. GnuCash SE
+ * therefore has no nested frames: a path {"se", "a", "b"} is the single
+ * key "se-a:b" at the top level of the instance. The elements after the
+ * first are series codes, period names, GUIDs and fixed words; none of
+ * them contains a colon or a slash. */
+static Path
+flat (const Path& path)
+{
+    std::string key {path.empty () ? "" : path.front ()};
+    for (size_t i = 1; i < path.size (); ++i)
+    {
+        key += i == 1 ? '-' : ':';
+        key += path[i];
+    }
+    return {key};
+}
+
+template <typename T> static std::optional<T>
+get_kvp (QofInstance* instance, const Path& path)
+{
+    return qof_instance_get_path_kvp<T> (instance, flat (path));
+}
+
+template <typename T> static void
+set_kvp (QofInstance* instance, T value, const Path& path)
+{
+    qof_instance_set_path_kvp<T> (instance, value, flat (path));
+}
+
+static void
+delete_kvp (QofInstance* instance, const Path& path)
+{
+    qof_instance_slot_path_delete (instance, flat (path));
+}
+
 static std::string
 get_string (QofInstance* instance, const Path& path)
 {
-    auto value {qof_instance_get_path_kvp<const char*> (instance, path)};
+    auto value {get_kvp<const char*> (instance, path)};
     return value && *value ? *value : "";
 }
 
 static int64_t
 get_int (QofInstance* instance, const Path& path)
 {
-    auto value {qof_instance_get_path_kvp<int64_t> (instance, path)};
+    auto value {get_kvp<int64_t> (instance, path)};
     return value ? *value : 0;
 }
 
@@ -93,20 +132,20 @@ static void
 set_string (QofInstance* instance, const Path& path, const std::string& value)
 {
     /* The slot takes ownership of the string. */
-    qof_instance_set_path_kvp<const char*> (instance,
+    set_kvp<const char*> (instance,
                                             g_strdup (value.c_str ()), path);
 }
 
 static void
 set_int (QofInstance* instance, const Path& path, int64_t value)
 {
-    qof_instance_set_path_kvp<int64_t> (instance, value, path);
+    set_kvp<int64_t> (instance, value, path);
 }
 
 static const GncGUID*
 get_guid (QofInstance* instance, const Path& path)
 {
-    auto value {qof_instance_get_path_kvp<GncGUID*> (instance, path)};
+    auto value {get_kvp<GncGUID*> (instance, path)};
     return value ? *value : nullptr;
 }
 
@@ -114,11 +153,26 @@ static void
 set_guid (QofInstance* instance, const Path& path, const GncGUID* guid)
 {
     /* The slot takes ownership of the copy. */
-    qof_instance_set_path_kvp<GncGUID*> (instance, guid_copy (guid), path);
+    set_kvp<GncGUID*> (instance, guid_copy (guid), path);
 }
 
 namespace
 {
+/* Makes everything that is saved while it lives one unit in the book's
+ * storage (design 06). What has been done in memory cannot be undone,
+ * so the unit is always kept, also when the work ends early. */
+struct Command
+{
+    QofBook* m_book;
+    explicit Command (QofBook* book) : m_book {book}
+    {
+        gnc_se_command_begin (m_book);
+    }
+    ~Command () { gnc_se_command_commit (m_book); }
+    Command (const Command&) = delete;
+    Command& operator= (const Command&) = delete;
+};
+
 /* Keeps the book open for editing for as long as it lives. */
 struct BookEdit
 {
@@ -183,7 +237,7 @@ std::optional<GDate>
 gnc_se_book_get_lock_date (const QofBook* book)
 {
     g_return_val_if_fail (book, std::nullopt);
-    auto date {qof_instance_get_path_kvp<GDate> (inst (book), {SE, "lock-date"})};
+    auto date {get_kvp<GDate> (inst (book), {SE, "lock-date"})};
     if (date && g_date_valid (&*date))
         return date;
     return std::nullopt;
@@ -285,14 +339,29 @@ find_series (const QofBook* book, const std::string& code)
                                         : GncSePeriodType::FISCAL_YEAR};
 }
 
-/* The names of the slots directly below @a path. */
+/* The names directly below @a path: the distinct next elements of the
+ * instance's keys that start with the path. In order. */
 static std::vector<std::string>
 child_keys (QofInstance* instance, const Path& path)
 {
+    std::vector<std::string> children;
     auto slots {qof_instance_get_slots (instance)};
-    auto value {slots ? slots->get_slot (path) : nullptr};
-    auto frame {value ? value->get<KvpFrame*> () : nullptr};
-    return frame ? frame->get_keys () : std::vector<std::string> {};
+    if (!slots)
+        return children;
+    auto prefix {flat (path).front () + ":"};
+    slots->for_each_slot_prefix (
+        prefix,
+        [] (const char* rest, KvpValue*, std::vector<std::string>& found)
+        {
+            std::string_view name {rest};
+            auto child {name.substr (0, name.find (':'))};
+            /* The keys come in order, so the same child comes in a row. */
+            if (found.empty () || found.back () != child)
+                found.emplace_back (child);
+        },
+        children);
+    std::sort (children.begin (), children.end ());
+    return children;
 }
 
 std::vector<GncSeSeries>
@@ -453,13 +522,13 @@ gnc_se_book_get_fiscal_years (const QofBook* book)
     g_return_val_if_fail (book, years);
     for (const auto& key : child_keys (inst (book), {SE, FISCAL_YEARS}))
     {
-        auto start {qof_instance_get_path_kvp<GDate> (
+        auto start {get_kvp<GDate> (
                 inst (book), {SE, FISCAL_YEARS, key, "start"})};
-        auto end {qof_instance_get_path_kvp<GDate> (
+        auto end {get_kvp<GDate> (
                 inst (book), {SE, FISCAL_YEARS, key, "end"})};
         if (!start || !end || !g_date_valid (&*start) || !g_date_valid (&*end))
             continue;
-        auto closed_at {qof_instance_get_path_kvp<Time64> (
+        auto closed_at {get_kvp<Time64> (
                 inst (book), {SE, FISCAL_YEARS, key, "closed-at"})};
         years.push_back ({key, *start, *end, true,
                           closed_at && closed_at->t != 0,
@@ -560,9 +629,9 @@ gnc_se_book_get_fiscal_year (const QofBook* book, const GDate& date)
 static void
 store_year (QofBook* book, const GncSeFiscalYear& year)
 {
-    qof_instance_set_path_kvp<GDate> (inst (book), year.start,
+    set_kvp<GDate> (inst (book), year.start,
                                       {SE, FISCAL_YEARS, year.key, "start"});
-    qof_instance_set_path_kvp<GDate> (inst (book), year.end,
+    set_kvp<GDate> (inst (book), year.end,
                                       {SE, FISCAL_YEARS, year.key, "end"});
 }
 
@@ -632,7 +701,7 @@ gnc_se_book_define_fiscal_year (QofBook* book, const GDate& start,
         if (lock_date && g_date_compare (&end, &*lock_date) < 0)
             return {false, _("The book is already posted past that day. The "
                              "fiscal year cannot end before the lock date.")};
-        qof_instance_set_path_kvp<GDate> (inst (book), end,
+        set_kvp<GDate> (inst (book), end,
                                           {SE, FISCAL_YEARS, last.key, "end"});
         history_append (book, "fiscal-year", "",
                         text_printf (_("The last day of fiscal year %s was "
@@ -909,11 +978,12 @@ lock_slots (const Transaction* trans)
     put (out, get_string (inst (trans), {SE, "series"}));
     put (out, get_string (inst (trans), {SE, "period"}));
     put (out, std::to_string (get_int (inst (trans), {SE, "number"})));
-    auto locked_at {qof_instance_get_path_kvp<Time64> (inst (trans),
+    auto locked_at {get_kvp<Time64> (inst (trans),
                                                        {SE, "locked-at"})};
     put (out, std::to_string (locked_at ? locked_at->t : 0));
     put (out, get_string (inst (trans), {SE, "hash"}));
     put (out, get_string (inst (trans), {SE, "former-num"}));
+    put (out, std::to_string (get_int (inst (trans), {SE, "seq"})));
     put (out, guid_slot_string (trans, "corrects"));
     put (out, guid_slot_string (trans, "replaces"));
     put (out, get_string (inst (trans), {SE, "signature"}));
@@ -980,6 +1050,117 @@ chain_next (const std::string& previous, const Transaction* trans)
 /* True while gnc_se_lock_through() locks transactions. */
 static bool lock_in_progress = false;
 
+/* Who is acting; see gnc_se_set_actor(). */
+static std::string current_actor;
+
+/* --- The transactions that are not posted ------------------------------
+ *
+ * Locking, and the check of what is overdue, need the transactions that
+ * have no voucher number. Asking every transaction in the book each time
+ * made a lock take as long as the book is large (design 06). The book
+ * therefore carries a register of them, in memory: built once by going
+ * through the book, and then kept up by the guard, which sees every
+ * transaction that is saved or deleted.
+ *
+ * The register may hold a transaction too many (one that was deleted
+ * without the guard seeing it, say); whoever reads it looks each one up
+ * and drops what is gone or posted. It must not miss one, so it is
+ * built again whenever something may have passed the guard by: a book
+ * being loaded, or the guard being set up or taken down. */
+
+namespace
+{
+struct GuidLess
+{
+    bool operator() (const GncGUID& a, const GncGUID& b) const
+    {
+        return guid_compare (&a, &b) < 0;
+    }
+};
+
+struct OpenRegister
+{
+    unsigned generation;
+    std::set<GncGUID, GuidLess> open;
+    int64_t next_seq; /* The next se-seq to hand out. */
+};
+}
+
+static const char* REGISTER_KEY = "gnc-se-open-register";
+static unsigned register_generation = 1;
+
+static std::vector<Transaction*> all_transactions (QofBook* book);
+
+/* The register if it is there and can be trusted. */
+static OpenRegister*
+register_if_built (const QofBook* book)
+{
+    auto found {static_cast<OpenRegister*> (
+        qof_book_get_data (book, REGISTER_KEY))};
+    return found && found->generation == register_generation ? found : nullptr;
+}
+
+static OpenRegister&
+open_register (QofBook* book)
+{
+    if (auto built {register_if_built (book)})
+        return *built;
+
+    auto fresh {new OpenRegister {register_generation, {}, 1}};
+    for (auto trans : all_transactions (book))
+    {
+        if (get_int (inst (trans), {SE, "number"}) <= 0)
+            fresh->open.insert (*xaccTransGetGUID (trans));
+        fresh->next_seq = std::max (fresh->next_seq,
+                                    get_int (inst (trans), {SE, "seq"}) + 1);
+    }
+    delete static_cast<OpenRegister*> (qof_book_get_data (book, REGISTER_KEY));
+    qof_book_set_data_fin (book, REGISTER_KEY, fresh,
+                           [] (QofBook*, gpointer, gpointer data)
+                           { delete static_cast<OpenRegister*> (data); });
+    return *fresh;
+}
+
+/* The transactions without a voucher number. */
+static std::vector<Transaction*>
+unposted_transactions (QofBook* book)
+{
+    auto& found {open_register (book)};
+    std::vector<Transaction*> result;
+    for (auto iter = found.open.begin (); iter != found.open.end ();)
+    {
+        auto trans {xaccTransLookup (&*iter, book)};
+        if (!trans || get_int (inst (trans), {SE, "number"}) > 0)
+            iter = found.open.erase (iter);
+        else
+        {
+            result.push_back (trans);
+            ++iter;
+        }
+    }
+    return result;
+}
+
+/* The guard has let a transaction without a voucher number through. */
+static void
+note_unposted (Transaction* trans, bool destroying, bool creating)
+{
+    auto book {xaccTransGetBook (trans)};
+    /* A transaction gets its place in the order of entry when it is
+     * first saved: a running number, so that the order does not depend
+     * on what the clock said or on two users saving in the same second. */
+    if (creating && !destroying && get_int (inst (trans), {SE, "seq"}) <= 0)
+        set_int (inst (trans), {SE, "seq"}, open_register (book).next_seq++);
+
+    if (auto built {register_if_built (book)})
+    {
+        if (destroying)
+            built->open.erase (*xaccTransGetGUID (trans));
+        else
+            built->open.insert (*xaccTransGetGUID (trans));
+    }
+}
+
 static std::string last_rejection;
 
 const std::string&
@@ -1006,9 +1187,13 @@ static void history_watch (bool on);
 static gboolean
 commit_guard (Transaction* trans, const Transaction* orig)
 {
-    /* A backend that reads a book creates the transactions as stored. */
+    /* A backend that reads a book creates the transactions as stored.
+     * What it reads is not in any register of unposted transactions. */
     if (qof_session_load_in_progress ())
+    {
+        ++register_generation;
         return TRUE;
+    }
 
     auto destroying {qof_instance_get_destroying (trans)};
 
@@ -1045,13 +1230,15 @@ commit_guard (Transaction* trans, const Transaction* orig)
      * A transaction is being created if it had no splits when the edit
      * began: one without splits does not survive a commit. (The
      * instance's "infant" flag is only cleared by the SQL backend.) */
-    if (!destroying && !get_splits (orig, false).empty ())
+    bool creating {get_splits (orig, false).empty ()};
+    if (!destroying && !creating)
     {
         auto lock_date {gnc_se_book_get_lock_date (xaccTransGetBook (trans))};
         if (lock_date && in_locked_period (trans, *lock_date, true) &&
             !in_locked_period (orig, *lock_date, false))
             return reject (trans, _("The date is in a locked period."));
     }
+    note_unposted (trans, destroying, creating);
     last_rejection.clear ();
     return TRUE;
 }
@@ -1059,6 +1246,7 @@ commit_guard (Transaction* trans, const Transaction* orig)
 void
 gnc_se_init ()
 {
+    ++register_generation;
     gnc_trans_set_commit_guard (commit_guard);
     history_watch (true);
 }
@@ -1066,6 +1254,7 @@ gnc_se_init ()
 void
 gnc_se_shutdown ()
 {
+    ++register_generation;
     gnc_trans_set_commit_guard (nullptr);
     history_watch (false);
     last_rejection.clear ();
@@ -1173,6 +1362,7 @@ gnc_se_correct (Transaction* original, const GDate& date,
         return GncSeCorrection {false, error, nullptr, nullptr};
     };
     g_return_val_if_fail (original, fail ("No transaction."));
+    Command command {xaccTransGetBook (original)};
 
     if (!gnc_se_trans_is_locked (original))
         return fail (_("Only a posted transaction is corrected with a "
@@ -1286,9 +1476,18 @@ all_transactions (QofBook* book)
     return result;
 }
 
+/* The order of entry. Transactions carry a running number from when
+ * they were first saved in GnuCash SE. Those that have none (made in
+ * another program) come first, by the time they say they were entered. */
 static bool
 entered_before (const Transaction* a, const Transaction* b)
 {
+    auto seq_a {get_int (inst (a), {SE, "seq"})};
+    auto seq_b {get_int (inst (b), {SE, "seq"})};
+    if ((seq_a > 0) != (seq_b > 0))
+        return seq_a <= 0;
+    if (seq_a != seq_b)
+        return seq_a < seq_b;
     auto entered_a {xaccTransGetDateEntered (a)};
     auto entered_b {xaccTransGetDateEntered (b)};
     if (entered_a != entered_b)
@@ -1377,7 +1576,7 @@ lock_transaction (Transaction* trans, const PeriodKey& key, PeriodState& state)
     set_string (inst (trans), {SE, "series"}, key.first);
     set_string (inst (trans), {SE, "period"}, key.second);
     set_int (inst (trans), {SE, "number"}, number);
-    qof_instance_set_path_kvp<Time64> (inst (trans), Time64 {gnc_time (nullptr)},
+    set_kvp<Time64> (inst (trans), Time64 {gnc_time (nullptr)},
                                        {SE, "locked-at"});
     xaccTransSetNum (trans, voucher.c_str ());
     if (!xaccTransGetReadOnly (trans))
@@ -1397,6 +1596,8 @@ lock_transaction (Transaction* trans, const PeriodKey& key, PeriodState& state)
         return false; /* The guard refused, which it should not. */
     state.next = number + 1;
     state.head = hash;
+    if (auto built {register_if_built (xaccTransGetBook (trans))})
+        built->open.erase (*xaccTransGetGUID (trans));
     note_correction (trans);
     return true;
 }
@@ -1448,9 +1649,9 @@ make_plan (QofBook* book, const GDate& date,
                                    "date. The lock date can only be moved "
                                    "forward."));
 
-    for (auto trans : all_transactions (book))
+    for (auto trans : unposted_transactions (book))
     {
-        if (gnc_se_trans_is_locked (trans) || !is_entry (trans))
+        if (!is_entry (trans))
             continue;
         auto posted {xaccTransGetDatePostedGDate (trans)};
         if (g_date_compare (&posted, &date) > 0)
@@ -1511,6 +1712,7 @@ gnc_se_lock_through (QofBook* book, const GDate& date,
 {
     g_return_val_if_fail (book, lock_error ("No book."));
 
+    Command command {book};
     /* What has happened to the accounts is recorded before the lock is. */
     gnc_se_history_sync (book);
 
@@ -1570,7 +1772,7 @@ gnc_se_lock_through (QofBook* book, const GDate& date,
         return result;
     }
 
-    qof_instance_set_path_kvp<GDate> (inst (book), date, {SE, "lock-date"});
+    set_kvp<GDate> (inst (book), date, {SE, "lock-date"});
 
     char date_text[MAX_DATE_LENGTH + 1] = "";
     qof_print_gdate (date_text, sizeof date_text, &date);
@@ -1622,6 +1824,7 @@ gnc_se_close_fiscal_year (QofBook* book, const GDate& date,
                           const std::string& signature)
 {
     g_return_val_if_fail (book, lock_error ("No book."));
+    Command command {book};
     if (!g_date_valid (&date))
         return lock_error ("%s", _("The date is not valid."));
     auto who {trimmed (signature)};
@@ -1656,7 +1859,7 @@ gnc_se_close_fiscal_year (QofBook* book, const GDate& date,
         locked = result.locked;
     }
 
-    qof_instance_set_path_kvp<Time64> (
+    set_kvp<Time64> (
         inst (book), Time64 {gnc_time (nullptr)},
         {SE, FISCAL_YEARS, year.key, "closed-at"});
     set_string (inst (book), {SE, FISCAL_YEARS, year.key, "closed-by"}, who);
@@ -1712,9 +1915,9 @@ gnc_se_overdue (QofBook* book, const GDate& today)
     g_return_val_if_fail (book && g_date_valid (&today), result);
 
     auto deferral {gnc_se_book_get_deferral (book)};
-    for (auto trans : all_transactions (book))
+    for (auto trans : unposted_transactions (book))
     {
-        if (gnc_se_trans_is_locked (trans) || !is_entry (trans))
+        if (!is_entry (trans))
             continue;
         auto posted {xaccTransGetDatePostedGDate (trans)};
         if (!g_date_valid (&posted))
@@ -1777,15 +1980,134 @@ history_started (const QofBook* book)
     return get_int (inst (book), {SE, HISTORY, "next"}) > 0;
 }
 
-static GncSeEvent
-read_event (const QofBook* book, int64_t number)
+/* --- Where the history is kept ---------------------------------------
+ *
+ * In the book's slots, or in a store that the backend has given the
+ * book (design 06). The functions below are the only ones that know. */
+
+static const char* STORE_KEY = "gnc-se-history-store";
+
+static GncSeHistoryStore*
+store_of (const QofBook* book)
 {
-    auto time {qof_instance_get_path_kvp<Time64> (inst (book),
-                                                  event_path (number, "time"))};
-    return {number, time ? time->t : 0,
-            get_string (inst (book), event_path (number, "type")),
-            get_string (inst (book), event_path (number, "signature")),
-            get_string (inst (book), event_path (number, "text"))};
+    auto holder {static_cast<std::shared_ptr<GncSeHistoryStore>*> (
+        qof_book_get_data (book, STORE_KEY))};
+    return holder ? holder->get () : nullptr;
+}
+
+static std::optional<GncSeStoredEvent>
+slot_event (const QofBook* book, int64_t number)
+{
+    auto hash {get_string (inst (book), event_path (number, "hash"))};
+    if (hash.empty ())
+        return std::nullopt;
+    auto time {get_kvp<Time64> (inst (book), event_path (number, "time"))};
+    return GncSeStoredEvent {
+        {number, time ? time->t : 0,
+         get_string (inst (book), event_path (number, "type")),
+         get_string (inst (book), event_path (number, "signature")),
+         get_string (inst (book), event_path (number, "text"))},
+        hash};
+}
+
+static void
+set_slot_event (QofBook* book, const GncSeStoredEvent& stored)
+{
+    auto number {stored.event.number};
+    set_kvp<Time64> (inst (book), Time64 {stored.event.time},
+                     event_path (number, "time"));
+    set_string (inst (book), event_path (number, "type"), stored.event.type);
+    set_string (inst (book), event_path (number, "signature"),
+                stored.event.signature);
+    set_string (inst (book), event_path (number, "text"), stored.event.text);
+    set_string (inst (book), event_path (number, "hash"), stored.hash);
+}
+
+static void
+delete_slot_event (QofBook* book, int64_t number)
+{
+    for (auto field : {"time", "type", "signature", "text", "hash"})
+        delete_kvp (inst (book), event_path (number, field));
+}
+
+/* The event with that number, if it is there. */
+static std::optional<GncSeStoredEvent>
+history_event (const QofBook* book, int64_t number)
+{
+    if (auto store {store_of (book)})
+        return store->event (number);
+    return slot_event (book, number);
+}
+
+static Path
+watched_path (const std::string& kind, const std::string& key,
+              const char* field)
+{
+    return {SE, HISTORY, kind, key, field};
+}
+
+static std::optional<GncSeWatched>
+slot_watched (const QofBook* book, const std::string& kind,
+              const std::string& key)
+{
+    auto state {get_string (inst (book), watched_path (kind, key, "state"))};
+    if (state.empty ())
+        return std::nullopt;
+    return GncSeWatched {
+        state, get_string (inst (book), watched_path (kind, key, "text"))};
+}
+
+static void
+set_slot_watched (QofBook* book, const std::string& kind,
+                  const std::string& key, const GncSeWatched& watched)
+{
+    set_string (inst (book), watched_path (kind, key, "state"), watched.state);
+    set_string (inst (book), watched_path (kind, key, "text"), watched.text);
+}
+
+static void
+delete_slot_watched (QofBook* book, const std::string& kind,
+                     const std::string& key)
+{
+    delete_kvp (inst (book), watched_path (kind, key, "state"));
+    delete_kvp (inst (book), watched_path (kind, key, "text"));
+}
+
+static std::optional<GncSeWatched>
+history_watched (const QofBook* book, const std::string& kind,
+                 const std::string& key)
+{
+    if (auto store {store_of (book)})
+        return store->watched (kind, key);
+    return slot_watched (book, kind, key);
+}
+
+static void
+history_set_watched (QofBook* book, const std::string& kind,
+                     const std::string& key, const GncSeWatched& watched)
+{
+    if (auto store {store_of (book)})
+        store->set_watched (kind, key, watched);
+    else
+        set_slot_watched (book, kind, key, watched);
+}
+
+static void
+history_erase_watched (QofBook* book, const std::string& kind,
+                       const std::string& key)
+{
+    if (auto store {store_of (book)})
+        store->erase_watched (kind, key);
+    else
+        delete_slot_watched (book, kind, key);
+}
+
+static std::vector<std::string>
+history_watched_keys (const QofBook* book, const std::string& kind)
+{
+    if (auto store {store_of (book)})
+        return store->watched_keys (kind);
+    return child_keys (inst (book), {SE, HISTORY, kind});
 }
 
 static void
@@ -1798,25 +2120,17 @@ write_event (QofBook* book, const char* type, const std::string& signature,
     if (previous.empty ())
         previous = history_chain_start (book);
 
-    GncSeEvent event {number, gnc_time (nullptr), type, signature, text};
-    auto hash {history_chain_next (previous, event)};
-    qof_instance_set_path_kvp<Time64> (inst (book), Time64 {event.time},
-                                       event_path (number, "time"));
-    set_string (inst (book), event_path (number, "type"), event.type);
-    set_string (inst (book), event_path (number, "signature"), event.signature);
-    set_string (inst (book), event_path (number, "text"), event.text);
-    set_string (inst (book), event_path (number, "hash"), hash);
+    GncSeEvent event {number, gnc_time (nullptr), type,
+                      signature.empty () ? current_actor : signature, text};
+    GncSeStoredEvent stored {event, history_chain_next (previous, event)};
+    if (auto store {store_of (book)})
+        store->append (stored);
+    else
+        set_slot_event (book, stored);
+    /* The position in the chain is always in the book. */
     set_int (inst (book), {SE, HISTORY, "next"}, number + 1);
-    set_string (inst (book), {SE, HISTORY, "head"}, hash);
+    set_string (inst (book), {SE, HISTORY, "head"}, stored.hash);
 }
-
-/* What the history knows about an account or a tax table: a state to
- * compare with, and a text to show. */
-struct Watched
-{
-    std::string state;
-    std::string text;
-};
 
 static std::string
 account_name (const Account* account)
@@ -1837,7 +2151,7 @@ account_is_watched (QofBook* book, const Account* account)
     return top == gnc_book_get_root_account (book);
 }
 
-static Watched
+static GncSeWatched
 watched_account (const Account* account)
 {
     auto parent {gnc_account_get_parent (account)};
@@ -1861,7 +2175,7 @@ watched_account (const Account* account)
     return {state, text};
 }
 
-static Watched
+static GncSeWatched
 watched_tax_table (const GncTaxTable* table)
 {
     std::vector<std::pair<std::string, std::string>> entries; /* state, text */
@@ -1883,7 +2197,7 @@ watched_tax_table (const GncTaxTable* table)
     }
     std::sort (entries.begin (), entries.end ());
 
-    Watched result;
+    GncSeWatched result;
     std::string name {view (gncTaxTableGetName (table))};
     put (result.state, name);
     result.text = name + ":";
@@ -1900,44 +2214,36 @@ watched_tax_table (const GncTaxTable* table)
  * false the state is only remembered. */
 static void
 sync_watched (QofBook* book, const char* kind, const GncGUID* guid,
-              const Watched* now, bool log, const char* added,
+              const GncSeWatched* now, bool log, const char* added,
               const char* changed, const char* removed)
 {
-    Path base {SE, HISTORY, kind, guid_string (guid)};
-    auto state_path {base};
-    state_path.push_back ("state");
-    auto text_path {base};
-    text_path.push_back ("text");
-    auto old_state {get_string (inst (book), state_path)};
-    auto old_text {get_string (inst (book), text_path)};
+    auto key {guid_string (guid)};
+    auto old {history_watched (book, kind, key)};
 
     if (!now)
     {
-        if (old_state.empty ())
+        if (!old)
             return;
-        qof_instance_slot_path_delete (inst (book), state_path);
-        qof_instance_slot_path_delete (inst (book), text_path);
-        qof_instance_slot_path_delete_if_empty (inst (book), base);
+        history_erase_watched (book, kind, key);
         if (log)
-            write_event (book, kind, "", text_printf (removed, old_text.c_str ()));
+            write_event (book, kind, "", text_printf (removed, old->text.c_str ()));
         return;
     }
-    if (now->state == old_state)
+    if (old && now->state == old->state)
         return;
-    set_string (inst (book), state_path, now->state);
-    set_string (inst (book), text_path, now->text);
+    history_set_watched (book, kind, key, *now);
     if (!log)
         return;
     write_event (book, kind, "",
-                 old_state.empty ()
+                 !old
                  ? text_printf (added, now->text.c_str ())
-                 : text_printf (changed, old_text.c_str (), now->text.c_str ()));
+                 : text_printf (changed, old->text.c_str (), now->text.c_str ()));
 }
 
 static void
 sync_account (QofBook* book, const Account* account, bool gone, bool log)
 {
-    Watched now;
+    GncSeWatched now;
     /* An account that is being set up counts once it has a name. */
     bool present {!gone && account_is_watched (book, account) &&
                   !view (xaccAccountGetName (account)).empty ()};
@@ -1960,7 +2266,7 @@ sync_tax_table (QofBook* book, const GncTaxTable* table, bool gone, bool log)
     /* A table that is being set up counts once it has a name. */
     if (!gone && view (gncTaxTableGetName (table)).empty ())
         return;
-    Watched now;
+    GncSeWatched now;
     if (!gone)
         now = watched_tax_table (table);
     sync_watched (book, "tax-table", qof_instance_get_guid (table),
@@ -1999,7 +2305,7 @@ sync_everything (QofBook* book, bool log)
             sync_account (book, account, false, log);
         });
     std::sort (seen.begin (), seen.end ());
-    for (const auto& key : child_keys (inst (book), {SE, HISTORY, "account"}))
+    for (const auto& key : history_watched_keys (book, "account"))
         if (!std::binary_search (seen.begin (), seen.end (), key))
         {
             GncGUID guid;
@@ -2018,7 +2324,7 @@ sync_everything (QofBook* book, bool log)
         sync_tax_table (book, table, false, log);
     }
     std::sort (seen.begin (), seen.end ());
-    for (const auto& key : child_keys (inst (book), {SE, HISTORY, "tax-table"}))
+    for (const auto& key : history_watched_keys (book, "tax-table"))
         if (!std::binary_search (seen.begin (), seen.end (), key))
         {
             GncGUID guid;
@@ -2033,8 +2339,8 @@ static void
 history_start (QofBook* book)
 {
     sync_everything (book, false);
-    auto accounts {child_keys (inst (book), {SE, HISTORY, "account"}).size ()};
-    auto tables {child_keys (inst (book), {SE, HISTORY, "tax-table"}).size ()};
+    auto accounts {history_watched_keys (book, "account").size ()};
+    auto tables {history_watched_keys (book, "tax-table").size ()};
     write_event (book, "start", "",
                  text_printf (_("The processing history starts. The book is "
                                 "kept with %s and has %d accounts and %d tax "
@@ -2118,15 +2424,140 @@ history_watch (bool on)
     }
 }
 
+std::shared_ptr<GncSeHistoryStore>
+gnc_se_book_get_history_store (const QofBook* book)
+{
+    g_return_val_if_fail (book, nullptr);
+    auto holder {static_cast<std::shared_ptr<GncSeHistoryStore>*> (
+        qof_book_get_data (book, STORE_KEY))};
+    return holder ? *holder : nullptr;
+}
+
+/* Replaces the book's store; nothing is moved. */
+static void
+attach_store (QofBook* book, std::shared_ptr<GncSeHistoryStore> store)
+{
+    delete static_cast<std::shared_ptr<GncSeHistoryStore>*> (
+        qof_book_get_data (book, STORE_KEY));
+    qof_book_set_data_fin (
+        book, STORE_KEY,
+        store ? new std::shared_ptr<GncSeHistoryStore> {std::move (store)}
+              : nullptr,
+        [] (QofBook*, gpointer, gpointer data)
+        {
+            delete static_cast<std::shared_ptr<GncSeHistoryStore>*> (data);
+        });
+}
+
+void
+gnc_se_book_set_history_store (QofBook* book,
+                               std::shared_ptr<GncSeHistoryStore> store)
+{
+    g_return_if_fail (book && store);
+
+    /* Move what the slots hold. With nothing there, the book is left
+     * untouched: it may be one that is being loaded. */
+    auto next {get_int (inst (book), {SE, HISTORY, "next"})};
+    std::vector<GncSeStoredEvent> events;
+    for (int64_t number = 1; number < next; ++number)
+        if (auto stored {slot_event (book, number)})
+            events.push_back (*stored);
+    auto accounts {child_keys (inst (book), {SE, HISTORY, "account"})};
+    auto tables {child_keys (inst (book), {SE, HISTORY, "tax-table"})};
+    if (!events.empty () || !accounts.empty () || !tables.empty ())
+    {
+        /* The book is not saved here: this is called while a backend
+         * saves or loads the book, and it writes the book itself. */
+        for (const auto& stored : events)
+        {
+            /* The store may already have it: a book whose history was
+             * moved but which was not saved afterwards. */
+            if (!store->event (stored.event.number))
+                store->append (stored);
+            delete_slot_event (book, stored.event.number);
+        }
+        for (auto kind : {"account", "tax-table"})
+            for (const auto& key :
+                 std::string_view {kind} == "account" ? accounts : tables)
+            {
+                if (auto watched {slot_watched (book, kind, key)})
+                    store->set_watched (kind, key, *watched);
+                delete_slot_watched (book, kind, key);
+            }
+        qof_instance_set_dirty (inst (book));
+    }
+    attach_store (book, std::move (store));
+}
+
+void
+gnc_se_history_to_book (QofBook* book)
+{
+    g_return_if_fail (book);
+    auto store {gnc_se_book_get_history_store (book)};
+    if (!store)
+        return;
+    /* The book is not saved here; whoever asked for this saves it. */
+    for (const auto& stored : store->events ())
+        set_slot_event (book, stored);
+    for (auto kind : {"account", "tax-table"})
+        for (const auto& key : store->watched_keys (kind))
+            if (auto watched {store->watched (kind, key)})
+                set_slot_watched (book, kind, key, *watched);
+    qof_instance_set_dirty (inst (book));
+    attach_store (book, nullptr);
+}
+
+void
+gnc_se_set_actor (const std::string& actor)
+{
+    current_actor = trimmed (actor);
+}
+
+const std::string&
+gnc_se_get_actor ()
+{
+    return current_actor;
+}
+
+bool
+gnc_se_command_begin (QofBook* book)
+{
+    g_return_val_if_fail (book, false);
+    auto store {store_of (book)};
+    return store ? store->begin () : true;
+}
+
+bool
+gnc_se_command_commit (QofBook* book)
+{
+    g_return_val_if_fail (book, false);
+    auto store {store_of (book)};
+    return store ? store->commit () : true;
+}
+
+bool
+gnc_se_command_rollback (QofBook* book)
+{
+    g_return_val_if_fail (book, false);
+    auto store {store_of (book)};
+    return store ? store->rollback () : true;
+}
+
 std::vector<GncSeEvent>
 gnc_se_book_get_history (const QofBook* book)
 {
     std::vector<GncSeEvent> events;
     g_return_val_if_fail (book, events);
+    if (auto store {store_of (book)})
+    {
+        for (const auto& stored : store->events ())
+            events.push_back (stored.event);
+        return events;
+    }
     auto next {get_int (inst (book), {SE, HISTORY, "next"})};
     for (int64_t number = 1; number < next; ++number)
-        if (!get_string (inst (book), event_path (number, "hash")).empty ())
-            events.push_back (read_event (book, number));
+        if (auto stored {slot_event (book, number)})
+            events.push_back (stored->event);
     return events;
 }
 
@@ -2260,7 +2691,7 @@ gnc_se_history_text (QofBook* book)
             char date[MAX_DATE_LENGTH + 1] = "";
             auto posted {xaccTransGetDatePostedGDate (trans)};
             qof_print_gdate (date, sizeof date, &posted);
-            auto locked_at {qof_instance_get_path_kvp<Time64> (
+            auto locked_at {get_kvp<Time64> (
                     inst (trans), {SE, "locked-at"})};
 
             std::string correction;
@@ -2429,15 +2860,14 @@ gnc_se_verify (QofBook* book)
     bool previous_hash_known = true;
     for (int64_t number = 1; number < next_event; ++number)
     {
-        auto stored {get_string (inst (book), event_path (number, "hash"))};
-        if (stored.empty () ||
+        auto stored {history_event (book, number)};
+        if (!stored ||
             (previous_hash_known &&
-             history_chain_next (previous_hash,
-                                 read_event (book, number)) != stored))
+             history_chain_next (previous_hash, stored->event) != stored->hash))
             issues.push_back (issue (GncSeIssueType::HISTORY_CHANGED, {}, number,
                                      0, nullptr));
-        previous_hash_known = !stored.empty ();
-        previous_hash = stored;
+        previous_hash_known = stored.has_value ();
+        previous_hash = stored ? stored->hash : "";
     }
     if (next_event > 1 && previous_hash_known &&
         get_string (inst (book), {SE, HISTORY, "head"}) != previous_hash)
