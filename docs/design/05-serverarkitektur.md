@@ -123,8 +123,8 @@ uppgifter på varje verifikation lägger till 19 s och 120 MB. Räknat per tusen
    0,9 s i minnet med 50 000 verifikationer i boken (0,16 s med 2 000), och `gnc_se_verify()` tar 14 s. Att
    bygga boken med 58 låsningar tog 188 s mot 85 s utan. Det ligger i SE-modulen: varje låsning går igenom alla
    transaktioner och läser deras KVP.
-6. **Laddtid och minne växer med boken och klarar inte de föreslagna gränserna vid 50 000 verifikationer**,
-   inte ens utan SE (12 s och 320 MB från PostgreSQL). Med SE som det lagras i dag är det 31 s och 444 MB. En
+6. **Laddtid och minne växer med boken**: 12 s och 320 MB från PostgreSQL vid 50 000 verifikationer redan
+   utan SE. Med SE som det lagras i dag är det 31 s och 444 MB. En
    bok med 10 000 verifikationer hamnar enligt samma takt runt 2,5 s och 85 MB utan SE. Hela boken i minnet är
    motorns grundantagande och går inte att ändra med en krok.
 7. **Vanliga skrivningar håller**: en ny verifikation tar 15 ms mot PostgreSQL (95:e percentilen 20 ms).
@@ -132,8 +132,8 @@ uppgifter på varje verifikation lägger till 19 s och 120 MB. Räknat per tusen
 Beslutet 2026-11-27 var att SE-data får flyttas ur bokens KVP "om mätningen kräver det". **Mätningen kräver
 det** för historikens läge per konto och för händelseloggen. Se avsnitt 6.
 
-Punkt 6 är den som avgör motorfrågan vid K1, och den beror på vilken bokstorlek gränserna ska gälla för
-(avsnitt 7).
+Punkt 6 styr hur bokvärdarna startas och hålls igång (4.1) och är, tillsammans med minnet, det som avgör
+motorfrågan vid K1 (avsnitt 7).
 
 ## 3. PostgreSQL genom libdbi
 
@@ -179,14 +179,28 @@ All läsning går genom samma tråd. Mätningen visar att rapporternas läsninga
 en riktigt tung fråga blockerar ändå registreringen i det företaget, och det mäts vid K1.
 
 **Gatewayen** är en autentiserande mellanhand. Den äger kontrolldatabasen (organisationer, användare,
-sessioner, API-nycklar, roller, företagsregister), startar en bokvärd när ett företag först används och
-stänger den efter en tids vila, och skickar begäran vidare med betrodda huvuden: användare, roll,
-begärans-id. Bokvärden litar på huvudena därför att bara gatewayen når dess socket (filrättigheter), och
+sessioner, API-nycklar, roller, företagsregister), startar och stänger bokvärdarna (se "Uppstart och vila"
+nedan), och skickar begäran vidare med betrodda huvuden: användare, roll, begärans-id. Bokvärden litar på huvudena därför att bara gatewayen når dess socket (filrättigheter), och
 kontrollerar själv rollen mot varje kommando.
 
 Gateway och bokvärd talar **samma HTTP + JSON** som klienterna. Det ger ett protokoll och en
 OpenAPI-beskrivning, och lokalt läge är bokvärden ensam. Gatewayen kan därför byggas efter bokvärden
 (steg 6 efter steg 4).
+
+**Uppstart och vila.** Krav (Isak 2026-11-27): att servern tar en halv minut på sig att starta med en bok på
+50 000 verifikationer är helt i sin ordning, men webbklienten får aldrig ta mer än 3 sekunder att starta,
+oavsett bokens storlek. Laddningen av boken får alltså inte ligga i vägen för användaren:
+
+- Gatewayen startar bokvärdarna **när servern startar**, inte när den första användaren kommer, och håller
+  dem igång.
+- En bokvärd stängs i vila bara om dess uppmätta laddtid är kort (riktvärde under 2 sekunder), så att nästa
+  användare inte märker omstarten. Stora böcker ligger kvar i minnet. Det gör minnet per öppet företag till
+  det som begränsar hur många företag en server rymmer (avsnitt 7).
+- Webbklienten själv är statiska filer och är framme direkt. Om ett företags bokvärd ändå håller på att läsa
+  in (efter en serverstart, en uppgradering eller en krasch) visar klienten det med förlopp i stället för att
+  stå tom, och resten av klienten (företagslista, inställningar) fungerar under tiden.
+- I lokalt läge är programstart och serverstart samma sak. Där är böckerna oftast små; för en stor bok visas
+  samma förlopp.
 
 **Lås och krasch.** Gatewayen håller ett eget lås per företag, så att två bokvärdar aldrig öppnar samma bok.
 Motorns `gnclock`-rad ligger kvar efter en krasch; eftersom gatewayens lås är det som gäller öppnar bokvärden
@@ -214,7 +228,8 @@ motorns, och omvänt, så att motorn kan bytas utan att API:t ändras.
   blir en synkning till disk per kommando i stället för en per objekt.
 - **Fel mitt i ett kommando.** Databasen rullas tillbaka, men motorns minne kan inte rullas tillbaka som
   helhet. Bokvärden avslutar sig då och startas om från databasen. Det ska vara sällsynt, eftersom valideringen
-  ligger före.
+  ligger före; när det händer kostar det en omladdning av företaget (upp till en halv minut för en stor bok),
+  under vilken klienterna ser att företaget läses in.
 - **Aktör.** Varje kommando bär den inloggade användaren. SE-modulen får en "aktuell aktör" som sätts före
   kommandot, så att alla historikhändelser får en signatur, även de som i dag saknar den (konton,
   momstabeller, inställningar).
@@ -317,12 +332,14 @@ rättningen. Den lämnas tills vidare.
 
 ## 7. Gränsvärden för K1 (förslag)
 
-K1 ligger efter gatewayen och före fakturorna. Mäts med `bench-all full` plus samtidiga klienter mot API:t.
+K1 ligger efter gatewayen och före fakturorna. Mäts med `bench-all` vid 10 000 och 50 000 verifikationer plus
+samtidiga klienter mot API:t.
 
 | Mätvärde | Föreslagen gräns | K0 i dag (stor bok, PostgreSQL) |
 |---|---|---|
-| Minne per öppet företag | högst 200 MB | 444 MB efter laddning, 557 MB efter mätningen (utan SE: 322 MB) |
-| Kallstart från PostgreSQL | högst 3 s | 31 s (utan SE: 12 s) |
+| Minne per öppet företag | högst 200 MB vid 10 000 verifikationer, 500 MB vid 50 000 | 444 MB efter laddning, 557 MB efter mätningen (utan SE: 322 MB) |
+| Webbklientens start mot en bokvärd som är igång (inloggning till första vy) | högst 3 s, oavsett bokstorlek | inte mätbart före API:t; läsningarna bakom vyerna tar under 0,2 s |
+| Serverstart: laddning av ett företag med 50 000 verifikationer | högst 30 s | 31 s (utan SE: 12 s) |
 | Skrivkommando, 95:e percentilen | högst 150 ms | ny verifikation 20 ms; bokändring 2 000–2 200 ms; låsning 8,3 s |
 | Rapport, 95:e percentilen | högst 500 ms | huvudbok 135 ms, verifikationslista 192 ms; första saldoberäkningen 1,1 s |
 | Köväntan med 20 samtidiga användare, 95:e percentilen | högst 100 ms | inte mätbart före API:t |
@@ -331,17 +348,14 @@ K1 ligger efter gatewayen och före fakturorna. Mäts med `bench-all full` plus 
 
 Faller två eller fler gränser efter att steg 2 är gjort byts motorn bakom API:t.
 
-**Att avgöra (Isak):**
+**Avgjort (Isak 2026-11-27):** laddtiden vid serverstart får vara en halv minut för 50 000 verifikationer.
+Webbklientens start får aldrig överstiga 3 sekunder. Därför hålls bokvärdarna igång (4.1), och "kallstart"
+är inte längre ett eget mått.
 
-1. **Vilken bokstorlek ska gränserna gälla för?** Med 50 000 verifikationer klarar motorn varken minnet eller
-   kallstarten, oavsett vad steg 2 gör med SE:s del. Med 10 000 verifikationer (till exempel 2 000 om året i
-   fem år) ser den ut att klara båda. Förslag: mät vid båda storlekarna, låt gränserna gälla vid 10 000, och
-   ange 50 000 som den storlek där en bokvärd får ta längre tid på sig att starta men inte får bli långsam i
-   arbetet.
-2. **Hur viktig är kallstarten?** Den märks när ett företag öppnas efter att bokvärden har stängts i vila,
-   och i lokalt läge varje gång programmet startas. Den går att mildra (håll bokvärdar igång längre, visa
-   förlopp) men inte ta bort så länge hela boken läses in.
-3. Gränserna i tabellen i övrigt.
+**Kvar att fastställa:** gränsen för minne. Eftersom stora böcker ligger kvar i minnet är det minnet som
+avgör hur många företag en server rymmer: i dag 444 MB för 50 000 verifikationer, och uppskattningsvis runt
+100 MB för 10 000. Förslag: högst 200 MB vid 10 000 verifikationer och högst 500 MB vid 50 000, mätt efter
+steg 2.
 
 ## 8. Kända begränsningar i mätningen
 
