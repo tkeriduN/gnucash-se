@@ -35,7 +35,7 @@ Grundfunktionerna i motorn (`libgnucash/se`), byggda 2026-11-26–27. Numren är
 Funktionerna nåddes genom en insticksmodul i GnuCash GTK-program. Den togs bort 2026-11-27 (steg 0 nedan), så
 tills webbklienten klarar kärnan (steg 5) finns de bara som API i motorn, med tester.
 
-Inte byggt av lagkraven i underlaget: systemdokumentation (BFNAR 9.2), steg 15 nedan.
+Inte byggt av lagkraven i underlaget: systemdokumentation (BFNAR 9.2), steg 17 nedan.
 
 ## 1. Målbild
 
@@ -64,7 +64,8 @@ GnuCash C++-motor med SE-modulen är kärnan; GTK-gränssnittet används inte l�
 | Nummerformat | Variabler i klamrar (`F-{nr:3}`), med fler variabler än i den första skissen (avsnitt 8) |
 | Bankimport | Eget steg efter första versionen. Isak beskriver vad som är bra och dåligt i iOrdnings lösning när designskissen skrivs |
 | Bolagsverket | Bryggan (avtal, certifikat) är ett separat projekt. SE speglar Bolagsverkets API v2.1 mot en inställbar adress |
-| Första versionen | Kärnan plus underlag, moms och kund- och leverantörsfakturor (avsnitt 5) |
+| Första versionen | Kärnan plus underlag, moms, SIE-import och kund- och leverantörsfakturor (avsnitt 5) |
+| SIE | Byggs här genom API:t. Import ingår i första versionen (steg 9); export är första steget efter den (steg 12) |
 
 Ytterligare val (kan ändras):
 - Servern byggs och testas först för Linux. macOS och Windows fortsätter bygga motorn i CI och får servern i
@@ -77,7 +78,7 @@ Ytterligare val (kan ändras):
 - Schemalagda transaktioner, budget och värdepapper ingår inte i planen.
 
 Beslut från 2026-11-26 som ändras (avsnitt 11): "all SE-data i KVP" (se ovan) och "ingen nätverkskod mot
-myndigheter" (gäller fortfarande Skatteverket; för Bolagsverket byggs klienten mot bryggan i steg 19). Arbetssättet står kvar: ett
+myndigheter" (gäller fortfarande Skatteverket; för Bolagsverket byggs klienten mot bryggan i steg 21). Arbetssättet står kvar: ett
 steg i taget på egen gren, designskiss först, grön CI, fråga Isak före merge, push på begäran.
 
 ## 3. Vad utredningen visade
@@ -167,21 +168,23 @@ Storlek: S, M, L, XL. Varje steg börjar med en designskiss i `docs/design/`.
 | K1 | Kontrollpunkt för motorn | Beslut: behåll eller byt motor bakom API:t | S | – |
 | 7 | Underlag | Uppladdning, lagring, koppling till verifikation, regler för underlag på låsta verifikationer | M | – |
 | 8 | Moms | Momsruta och redovisningskod per konto, momsrapport per period, eSKD-fil | M | – |
-| 9 | PDF och e-post | Typst-mallar för rapporter, PDF/A, e-postutskick | M | Två ställen att underhålla utseende på |
-| 10 | Fakturor | Kunder, leverantörer, fakturor, betalningar, reskontra, flervaluta, nummerformat, PDF och mejl | XL | Fakturalogiken som i dag ligger i GTK-lagret |
+| 9 | SIE-import | Läser SIE typ 4 (4E för flytt från ett annat program, 4I för verifikationer) och typ 1–3 (saldon) enligt utgåva 4C: kontoplan, räkenskapsår, ingående balanser, verifikationer, SRU-koder, objekt. Provas mot SIE-gruppens exempelfiler. Regler för importerade verifikationers serier och nummer och för import i låst period | M–L | Hur importerade verifikationer förhåller sig till lås och obruten numrering |
+| 10 | PDF och e-post | Typst-mallar för rapporter, PDF/A, e-postutskick | M | Två ställen att underhålla utseende på |
+| 11 | Fakturor | Kunder, leverantörer, fakturor, betalningar, reskontra, flervaluta, nummerformat, PDF och mejl | XL | Fakturalogiken som i dag ligger i GTK-lagret |
 | | **Första användbara versionen** | | | |
-| 11 | Realtid | Ändringsström i webbklienten, närvaro, konfliktvisning | M | |
-| 12 | SSO | Inbyggd OIDC, betrodda huvuden från proxy, enhetskod för CLI, tvåfaktor för lokala konton | M | Egen säkerhetskod |
-| 13 | Lokalt läge och paketering | Startprogram, Windows och macOS, installationspaket. Tauri-fönster därefter | M–L | Windows och macOS |
-| 14 | SaaS | Åtskilda organisationer, självregistrering, kvoter, PostgreSQL som kontrolldatabas, containeravbild, säkerhetskopiering | L | Antal öppna företag per server |
-| 15 | Systemdokumentation | BFNAR 9.2, struken 2026-11-26 i väntan på serverläget | S–M | |
-| 16 | Bankimport | Filimport (CSV, camt.053, OFX), inkorg, matchning, förslag och regler. Isak beskriver förebilden | L | |
-| 17 | SRU | INK2R, INK2S, NE | L | |
-| 18 | BAS-årgångsbyte | Överlappet mot upstreamspårets verktyg avgörs när steget börjar | L | |
-| 19 | Årsredovisning | iXBRL för K2, klient som speglar Bolagsverkets API v2.1 med inställbar adress, API-nyckel eller klientcertifikat, testad mot egen attrapp | L–XL | Taxonomin |
+| 12 | SIE-export | Skriver SIE typ 4E och 1–3 enligt utgåva 4C med alla obligatoriska poster, kontrollerad med sietest.sie.se | M | |
+| 13 | Realtid | Ändringsström i webbklienten, närvaro, konfliktvisning | M | |
+| 14 | SSO | Inbyggd OIDC, betrodda huvuden från proxy, enhetskod för CLI, tvåfaktor för lokala konton | M | Egen säkerhetskod |
+| 15 | Lokalt läge och paketering | Startprogram, Windows och macOS, installationspaket. Tauri-fönster därefter | M–L | Windows och macOS |
+| 16 | SaaS | Åtskilda organisationer, självregistrering, kvoter, PostgreSQL som kontrolldatabas, containeravbild, säkerhetskopiering | L | Antal öppna företag per server |
+| 17 | Systemdokumentation | BFNAR 9.2, struken 2026-11-26 i väntan på serverläget | S–M | |
+| 18 | Bankimport | Filimport (CSV, camt.053, OFX), inkorg, matchning, förslag och regler. Isak beskriver förebilden | L | |
+| 19 | SRU | INK2R, INK2S, NE | L | |
+| 20 | BAS-årgångsbyte | Överlappet mot upstreamspårets verktyg avgörs när steget börjar | L | |
+| 21 | Årsredovisning | iXBRL för K2, klient som speglar Bolagsverkets API v2.1 med inställbar adress, API-nyckel eller klientcertifikat, testad mot egen attrapp | L–XL | Taxonomin |
 
-Beroenden: 0 → 1 → 2 → 3 → 4, därefter 5 och 6 parallellt i ordning efter behov. 7, 8 och 10 kräver 5 och 6;
-10 kräver också 9 och K1.
+Beroenden: 0 → 1 → 2 → 3 → 4, därefter 5 och 6 parallellt i ordning efter behov. 7, 8, 9 och 11 kräver 5 och 6;
+9 kräver också 8 (SRU-koderna), och 11 kräver 10 och K1.
 
 **Synk mot upstream:** direkt efter steg 0, veckan efter frysningen 2027-02-07 och vid 6.0 (2027-03-28). Ett
 GTK-bygge körs bara på synkgrenarna, som kontroll av att upstreams kod fortfarande bygger hos oss.
@@ -213,17 +216,17 @@ Faller två eller fler gränser byts motorn bakom API:t.
 | 5 | TypeScript, Playwright | Apache-2.0 | Typer, tester i webbläsare (bara vid bygge och test) |
 | 5 | Inter, Lucide | OFL-1.1, ISC | Typsnitt och ikoner |
 | 6 | libsodium, SQLite | ISC, public domain | Lösenord (argon2id), slumptal; kontrolldatabas |
-| 9 | Typst, libcurl | Apache-2.0, curl | PDF; e-post (SMTP) |
-| 12 | OpenSSL, jwt-cpp | Apache-2.0, MIT | HTTPS-klient och kontroll av ID-token |
-| 13 | Tauri (senare) | MIT/Apache-2.0 | Eget programfönster |
+| 10 | Typst, libcurl | Apache-2.0, curl | PDF; e-post (SMTP) |
+| 14 | OpenSSL, jwt-cpp | Apache-2.0, MIT | HTTPS-klient och kontroll av ID-token |
+| 15 | Tauri (senare) | MIT/Apache-2.0 | Eget programfönster |
 | Drift | Caddy eller nginx | Apache-2.0, BSD | TLS framför servern |
 
-Apache-2.0-bibliotek går bra ihop med AGPL-3.0. Byggimagen behöver byggas om i steg 1, 6, 9 och 12; inget
+Apache-2.0-bibliotek går bra ihop med AGPL-3.0. Byggimagen behöver byggas om i steg 1, 6, 10 och 14; inget
 kräver systempaket på värden (node 24, npm 11, podman och psql 18 finns redan).
 
 ## 8. Detaljer
 
-**Nummerformat (räknare), byggs i steg 10:**
+**Nummerformat (räknare), byggs i steg 11:**
 - Syntax med variabler i klamrar. Urvalet fastställs i designskissen utifrån vad motorn har, minst: löpnummer
   med valfri bredd (`{nr}`, `{nr:3}`), år, kort år, månad, dag, vecka, kvartal, företagets datumformat
   (`{datum}`), räkenskapsår, dokumenttyp, kund- eller leverantörsnummer.
@@ -233,7 +236,7 @@ kräver systempaket på värden (node 24, npm 11, podman och psql 18 finns redan
   att en krasch inte ger en lucka.
 - Översätts till motorns printf-format i kommandolagret; ingen krok i motorn.
 
-**Bankimport, steg 16:** inkorg i webbklienten där kontoutdragsrader matchas mot verifikationer och omatchade
+**Bankimport, steg 18:** inkorg i webbklienten där kontoutdragsrader matchas mot verifikationer och omatchade
 rader bokförs med förslag. Kända brister hos iOrdning att undvika: rubriken kopieras ordagrant från den
 tidigare verifikationen, och förslag saknas när beloppet varierar.
 
@@ -248,6 +251,7 @@ WCAG 2.2 AA, tangentbordet först (kommandopalett, registrering utan mus).
 | Kommandolager | gtest mot motorn med SQLite i temporär fil, en delmängd mot PostgreSQL i CI. Felinjektion: avbryt mitt i ett kommando, ladda om, boken ska vara oförändrad |
 | API | Kontraktstester mot `openapi.yaml` med en riktig bokvärd |
 | Webbklient | Vitest för logik, Playwright mot en riktig bokvärd med testbok |
+| SIE | SIE-gruppens exempelfiler in, jämförelse av saldon och verifikationer; export kontrolleras med sietest.sie.se |
 | Hela kedjan | Registrera, låsa, rätta, ta ut rapport; därefter `gnc_se_verify()` och kontroll att boken går att öppna för granskning |
 | Prestanda | Bokgenerator och mätskript från steg 1, samma vid K1 |
 
@@ -267,7 +271,7 @@ WCAG 2.2 AA, tangentbordet först (kommandopalett, registrering utan mus).
 | Förhållande till upstream | Fristående projekt. Upstream är startpunkt och källa för ändringar via synk; forken skickar inget tillbaka |
 | Bokformat | En SE-bok används i SE. Vanlig GnuCash ska kunna öppna den för granskning, inte för arbete. Ingen feature-flagga. Ändringar utanför SE upptäcks och rapporteras som fel. Ändrat 2026-11-27: historik och liknande får flyttas ur KVP om mätningen i steg 1 kräver det, och syns då inte i vanlig GnuCash |
 | Lås och numrering | Periodlåsning (ingen "Bokför direkt"); en serie per räkenskapsår som standard |
-| Myndigheter | SE skriver filer (SIE, eSKD-XML, SRU) som laddas upp i myndighetens e-tjänst. Ingen nätverkskod mot Skatteverket. Ändrat 2026-11-27 för Bolagsverket: steg 19 |
+| Myndigheter | SE skriver filer (SIE, eSKD-XML, SRU) som laddas upp i myndighetens e-tjänst. Ingen nätverkskod mot Skatteverket. Ändrat 2026-11-27 för Bolagsverket: steg 21 |
 | AI-märkning | Trailern `Assisted-by: Claude Code` i commits. Inget krav på `Signed-off-by` |
 | BAS-data | Kontonamn ur BAS filer läggs inte in innan rättighetsfrågan är utredd |
 
@@ -282,8 +286,8 @@ byggs inte här.
 | Lås, numrering, rättelse, behandlingshistorik, räkenskapsår | Avvisat av upstream 2026-11-26, respektive inget arbete | Byggt här |
 | Rättningar av sv_SE-mallarna och mall-laddaren, BAS 2026-kontomallar | Pågår respektive planerat | Kommer via synk (datafiler och motorkod) |
 | Kontomatchning när kontoträd slås ihop | Buggfix planerad | Kommer via synk om den ligger i motorn |
-| SIE-export och -import | Planerat upstream (mot 6.0) | **Öppet:** hamnar upstreams kod i GTK-lagret byggs den inte här, och då behövs en egen väg genom API:t. Avgörs när upstreams kod finns. SIE har inget eget steg i planen än |
+| SIE-export och -import | Planerat upstream (mot 6.0) | Byggs här genom API:t (import steg 9, export steg 12). Upstreams kod väntas hamna i GTK-programmet, som inte byggs här; hamnar tolkningen i motorn kan den återanvändas |
 | Redovisningskoder per konto | Skjutet till efter 6.0 | Egna `se/`-nycklar nu (steg 8); upstreams lösning mappas in om den kommer |
 | Moms: rapport och eSKD-fil | Inget beslutat | Byggs här (steg 8) |
-| SRU | Skjutet till efter 6.0 | Byggs här (steg 17) |
-| Byte mellan BAS-årgångar | Planerat som fristående verktyg | Avgörs när steg 18 börjar: ett verktyg räcker |
+| SRU | Skjutet till efter 6.0 | Byggs här (steg 19) |
+| Byte mellan BAS-årgångar | Planerat som fristående verktyg | Avgörs när steg 20 börjar: ett verktyg räcker |
