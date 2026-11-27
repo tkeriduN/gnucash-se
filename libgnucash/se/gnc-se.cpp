@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -967,6 +968,7 @@ lock_slots (const Transaction* trans)
     put (out, std::to_string (locked_at ? locked_at->t : 0));
     put (out, get_string (inst (trans), {SE, "hash"}));
     put (out, get_string (inst (trans), {SE, "former-num"}));
+    put (out, std::to_string (get_int (inst (trans), {SE, "seq"})));
     put (out, guid_slot_string (trans, "corrects"));
     put (out, guid_slot_string (trans, "replaces"));
     put (out, get_string (inst (trans), {SE, "signature"}));
@@ -1033,6 +1035,114 @@ chain_next (const std::string& previous, const Transaction* trans)
 /* True while gnc_se_lock_through() locks transactions. */
 static bool lock_in_progress = false;
 
+/* --- The transactions that are not posted ------------------------------
+ *
+ * Locking, and the check of what is overdue, need the transactions that
+ * have no voucher number. Asking every transaction in the book each time
+ * made a lock take as long as the book is large (design 06). The book
+ * therefore carries a register of them, in memory: built once by going
+ * through the book, and then kept up by the guard, which sees every
+ * transaction that is saved or deleted.
+ *
+ * The register may hold a transaction too many (one that was deleted
+ * without the guard seeing it, say); whoever reads it looks each one up
+ * and drops what is gone or posted. It must not miss one, so it is
+ * built again whenever something may have passed the guard by: a book
+ * being loaded, or the guard being set up or taken down. */
+
+namespace
+{
+struct GuidLess
+{
+    bool operator() (const GncGUID& a, const GncGUID& b) const
+    {
+        return guid_compare (&a, &b) < 0;
+    }
+};
+
+struct OpenRegister
+{
+    unsigned generation;
+    std::set<GncGUID, GuidLess> open;
+    int64_t next_seq; /* The next se-seq to hand out. */
+};
+}
+
+static const char* REGISTER_KEY = "gnc-se-open-register";
+static unsigned register_generation = 1;
+
+static std::vector<Transaction*> all_transactions (QofBook* book);
+
+/* The register if it is there and can be trusted. */
+static OpenRegister*
+register_if_built (const QofBook* book)
+{
+    auto found {static_cast<OpenRegister*> (
+        qof_book_get_data (book, REGISTER_KEY))};
+    return found && found->generation == register_generation ? found : nullptr;
+}
+
+static OpenRegister&
+open_register (QofBook* book)
+{
+    if (auto built {register_if_built (book)})
+        return *built;
+
+    auto fresh {new OpenRegister {register_generation, {}, 1}};
+    for (auto trans : all_transactions (book))
+    {
+        if (get_int (inst (trans), {SE, "number"}) <= 0)
+            fresh->open.insert (*xaccTransGetGUID (trans));
+        fresh->next_seq = std::max (fresh->next_seq,
+                                    get_int (inst (trans), {SE, "seq"}) + 1);
+    }
+    delete static_cast<OpenRegister*> (qof_book_get_data (book, REGISTER_KEY));
+    qof_book_set_data_fin (book, REGISTER_KEY, fresh,
+                           [] (QofBook*, gpointer, gpointer data)
+                           { delete static_cast<OpenRegister*> (data); });
+    return *fresh;
+}
+
+/* The transactions without a voucher number. */
+static std::vector<Transaction*>
+unposted_transactions (QofBook* book)
+{
+    auto& found {open_register (book)};
+    std::vector<Transaction*> result;
+    for (auto iter = found.open.begin (); iter != found.open.end ();)
+    {
+        auto trans {xaccTransLookup (&*iter, book)};
+        if (!trans || get_int (inst (trans), {SE, "number"}) > 0)
+            iter = found.open.erase (iter);
+        else
+        {
+            result.push_back (trans);
+            ++iter;
+        }
+    }
+    return result;
+}
+
+/* The guard has let a transaction without a voucher number through. */
+static void
+note_unposted (Transaction* trans, bool destroying, bool creating)
+{
+    auto book {xaccTransGetBook (trans)};
+    /* A transaction gets its place in the order of entry when it is
+     * first saved: a running number, so that the order does not depend
+     * on what the clock said or on two users saving in the same second. */
+    if (creating && !destroying && get_int (inst (trans), {SE, "seq"}) <= 0)
+        set_int (inst (trans), {SE, "seq"}, open_register (book).next_seq++);
+
+    if (auto built {register_if_built (book)})
+    {
+        if (destroying)
+            built->open.erase (*xaccTransGetGUID (trans));
+        else
+            built->open.insert (*xaccTransGetGUID (trans));
+    }
+}
+
 static std::string last_rejection;
 
 const std::string&
@@ -1059,9 +1169,13 @@ static void history_watch (bool on);
 static gboolean
 commit_guard (Transaction* trans, const Transaction* orig)
 {
-    /* A backend that reads a book creates the transactions as stored. */
+    /* A backend that reads a book creates the transactions as stored.
+     * What it reads is not in any register of unposted transactions. */
     if (qof_session_load_in_progress ())
+    {
+        ++register_generation;
         return TRUE;
+    }
 
     auto destroying {qof_instance_get_destroying (trans)};
 
@@ -1098,13 +1212,15 @@ commit_guard (Transaction* trans, const Transaction* orig)
      * A transaction is being created if it had no splits when the edit
      * began: one without splits does not survive a commit. (The
      * instance's "infant" flag is only cleared by the SQL backend.) */
-    if (!destroying && !get_splits (orig, false).empty ())
+    bool creating {get_splits (orig, false).empty ()};
+    if (!destroying && !creating)
     {
         auto lock_date {gnc_se_book_get_lock_date (xaccTransGetBook (trans))};
         if (lock_date && in_locked_period (trans, *lock_date, true) &&
             !in_locked_period (orig, *lock_date, false))
             return reject (trans, _("The date is in a locked period."));
     }
+    note_unposted (trans, destroying, creating);
     last_rejection.clear ();
     return TRUE;
 }
@@ -1112,6 +1228,7 @@ commit_guard (Transaction* trans, const Transaction* orig)
 void
 gnc_se_init ()
 {
+    ++register_generation;
     gnc_trans_set_commit_guard (commit_guard);
     history_watch (true);
 }
@@ -1119,6 +1236,7 @@ gnc_se_init ()
 void
 gnc_se_shutdown ()
 {
+    ++register_generation;
     gnc_trans_set_commit_guard (nullptr);
     history_watch (false);
     last_rejection.clear ();
@@ -1339,9 +1457,18 @@ all_transactions (QofBook* book)
     return result;
 }
 
+/* The order of entry. Transactions carry a running number from when
+ * they were first saved in GnuCash SE. Those that have none (made in
+ * another program) come first, by the time they say they were entered. */
 static bool
 entered_before (const Transaction* a, const Transaction* b)
 {
+    auto seq_a {get_int (inst (a), {SE, "seq"})};
+    auto seq_b {get_int (inst (b), {SE, "seq"})};
+    if ((seq_a > 0) != (seq_b > 0))
+        return seq_a <= 0;
+    if (seq_a != seq_b)
+        return seq_a < seq_b;
     auto entered_a {xaccTransGetDateEntered (a)};
     auto entered_b {xaccTransGetDateEntered (b)};
     if (entered_a != entered_b)
@@ -1450,6 +1577,8 @@ lock_transaction (Transaction* trans, const PeriodKey& key, PeriodState& state)
         return false; /* The guard refused, which it should not. */
     state.next = number + 1;
     state.head = hash;
+    if (auto built {register_if_built (xaccTransGetBook (trans))})
+        built->open.erase (*xaccTransGetGUID (trans));
     note_correction (trans);
     return true;
 }
@@ -1501,9 +1630,9 @@ make_plan (QofBook* book, const GDate& date,
                                    "date. The lock date can only be moved "
                                    "forward."));
 
-    for (auto trans : all_transactions (book))
+    for (auto trans : unposted_transactions (book))
     {
-        if (gnc_se_trans_is_locked (trans) || !is_entry (trans))
+        if (!is_entry (trans))
             continue;
         auto posted {xaccTransGetDatePostedGDate (trans)};
         if (g_date_compare (&posted, &date) > 0)
@@ -1765,9 +1894,9 @@ gnc_se_overdue (QofBook* book, const GDate& today)
     g_return_val_if_fail (book && g_date_valid (&today), result);
 
     auto deferral {gnc_se_book_get_deferral (book)};
-    for (auto trans : all_transactions (book))
+    for (auto trans : unposted_transactions (book))
     {
-        if (gnc_se_trans_is_locked (trans) || !is_entry (trans))
+        if (!is_entry (trans))
             continue;
         auto posted {xaccTransGetDatePostedGDate (trans)};
         if (!g_date_valid (&posted))

@@ -1585,6 +1585,91 @@ TEST_F (SeTest, the_hash_of_a_transaction_is_stable)
 }
 
 /* ------------------------------------------------------------------ */
+/* The order of entry and the register of unposted transactions       */
+
+static int64_t
+seq (const Transaction* trans)
+{
+    auto value {qof_instance_get_path_kvp<int64_t> (
+            QOF_INSTANCE (const_cast<Transaction*> (trans)), {"se-seq"})};
+    return value ? *value : 0;
+}
+
+/* Design 06: the order is the order in which the transactions were
+ * first saved, whatever the clock said. */
+TEST_F (SeTest, vouchers_are_numbered_in_the_order_they_were_saved)
+{
+    /* All three in the same second, and the last one claiming to be the
+     * earliest. */
+    auto a {add (date (2025, 1, 20), 5000, "Saved first", 10000, m_bank, m_sales)};
+    auto b {add (date (2025, 1, 10), 5000, "Saved second", 20000, m_bank, m_sales)};
+    auto c {add (date (2025, 1, 15), 4000, "Saved third", 30000, m_bank, m_sales)};
+    EXPECT_LT (seq (a), seq (b));
+    EXPECT_LT (seq (b), seq (c));
+
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    EXPECT_EQ (gnc_se_trans_get_voucher (a), "A 1");
+    EXPECT_EQ (gnc_se_trans_get_voucher (b), "A 2");
+    EXPECT_EQ (gnc_se_trans_get_voucher (c), "A 3");
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+/* A transaction that was not made in GnuCash SE has no place in the
+ * order; it comes first, by the time it says it was entered. */
+TEST_F (SeTest, transactions_without_a_place_in_the_order_come_first)
+{
+    auto a {add (date (2025, 1, 20), 1000, "Ours", 10000, m_bank, m_sales)};
+    auto late {add (date (2025, 1, 10), 3000, "Foreign, later", 20000, m_bank,
+                    m_sales)};
+    auto early {add (date (2025, 1, 15), 2000, "Foreign, earlier", 30000,
+                     m_bank, m_sales)};
+    for (auto trans : {late, early})
+    {
+        xaccTransBeginEdit (trans);
+        qof_instance_slot_path_delete (QOF_INSTANCE (trans), {"se-seq"});
+        xaccTransCommitEdit (trans);
+        ASSERT_EQ (seq (trans), 0);
+    }
+
+    ASSERT_TRUE (lock (date (2025, 1, 31)).ok);
+    EXPECT_EQ (gnc_se_trans_get_voucher (early), "A 1");
+    EXPECT_EQ (gnc_se_trans_get_voucher (late), "A 2");
+    EXPECT_EQ (gnc_se_trans_get_voucher (a), "A 3");
+}
+
+/* The register follows what is added, deleted and posted between locks. */
+TEST_F (SeTest, the_register_of_unposted_transactions_keeps_up)
+{
+    add_january ();
+    ASSERT_EQ (lock (date (2025, 1, 31)).locked, 3);
+
+    auto kept {add (date (2025, 2, 3), 4000, "Kept", 40000, m_bank, m_sales)};
+    auto deleted {add (date (2025, 2, 4), 5000, "Deleted", 50000, m_bank,
+                       m_sales)};
+    auto later {add (date (2025, 3, 3), 6000, "In March", 60000, m_bank,
+                     m_sales)};
+    xaccTransBeginEdit (deleted);
+    xaccTransDestroy (deleted);
+    xaccTransCommitEdit (deleted);
+
+    auto plan {gnc_se_plan_lock (m_book, date (2025, 2, 28))};
+    ASSERT_TRUE (plan.ok);
+    EXPECT_EQ (plan.total, 1);
+    ASSERT_EQ (lock (date (2025, 2, 28)).locked, 1);
+    EXPECT_EQ (gnc_se_trans_get_voucher (kept), "A 4");
+    EXPECT_FALSE (gnc_se_trans_is_locked (later));
+
+    /* Changing an unposted transaction does not put it there twice. */
+    xaccTransBeginEdit (later);
+    xaccTransSetDescription (later, "Still in March");
+    xaccTransCommitEdit (later);
+    ASSERT_EQ (lock (date (2025, 3, 31)).locked, 1);
+    EXPECT_EQ (gnc_se_trans_get_voucher (later), "A 5");
+    ASSERT_EQ (lock (date (2025, 4, 30)).locked, 0);
+    EXPECT_TRUE (gnc_se_verify (m_book).empty ());
+}
+
+/* ------------------------------------------------------------------ */
 /* Saved and read again                                               */
 
 class SeFileTest : public SeTest, public ::testing::WithParamInterface<const char*>
@@ -1725,6 +1810,17 @@ TEST_P (SeFileTest, a_locked_book_survives_save_and_load)
     auto preliminary {xaccTransLookup (&february_guid, m_book)};
     ASSERT_NE (preliminary, nullptr);
     EXPECT_FALSE (gnc_se_trans_is_locked (preliminary));
+    /* So does the order of entry: what is saved now comes after
+     * everything that was read. */
+    auto root {gnc_book_get_root_account (m_book)};
+    m_sek = gnc_commodity_table_lookup (
+        gnc_commodity_table_get_table (m_book), GNC_COMMODITY_NS_CURRENCY, "SEK");
+    auto newest {add (date (2025, 2, 20), 1, "After the load", 100,
+                      gnc_account_lookup_by_code (root, "1930"),
+                      gnc_account_lookup_by_code (root, "3001"))};
+    EXPECT_GT (seq (preliminary), 0);
+    EXPECT_GT (seq (newest), seq (preliminary));
+    EXPECT_GT (seq (newest), seq (first));
     /* The correcting entry and its links came back as well. */
     auto second {xaccTransLookup (&second_guid, m_book)};
     auto correction {xaccTransLookup (&correction_guid, m_book)};
