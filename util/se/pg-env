@@ -1,0 +1,55 @@
+#!/bin/sh
+# Kör ett kommando med en tillfällig PostgreSQL-server igång. Avsett att köras INNE i
+# byggcontainern (imagen har PostgreSQL och libdbd-pgsql):
+#
+#   util/se/future-env ../../util/se/pg-env ctest -R test-backend-dbi --output-on-failure
+#   util/se/future-env ../../util/se/pg-env bin/gcse-bench generate "$GCSE_PG_URL/bench"
+#
+# Servern får en ny, tom datakatalog i containerns /tmp, lyssnar bara på 127.0.0.1 och
+# försvinner med containern. Inloggningen är öppen ("trust") för allt på 127.0.0.1, så
+# användarnamnet och lösenordet nedan är inga hemligheter: de finns bara för att motorns
+# databas-URI kräver dem.
+#
+# Variabler som kommandot får:
+#   GCSE_PG_URL     postgres://gnc:gnc@127.0.0.1   (lägg till /databasnamn)
+#   TEST_PGSQL_URL  en färdig, tom databas för upstreams test-backend-dbi
+#
+# Miljövariabler in:
+#   PG_FSYNC        "off" stänger av fsync (snabbare, men mäter inte varaktig skrivning)
+set -eu
+
+[ $# -gt 0 ] || { echo "pg-env: inget kommando angivet" >&2; exit 2; }
+
+pgbin=$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -n 1)
+[ -n "$pgbin" ] && [ -x "$pgbin/initdb" ] ||
+    { echo "pg-env: hittar ingen PostgreSQL (körs skriptet i byggcontainern?)" >&2; exit 1; }
+
+data=$(mktemp -d /tmp/pg-env.XXXXXX)
+chown postgres "$data"
+as_pg() { runuser -u postgres -- "$@"; }
+
+stop() {
+    as_pg "$pgbin/pg_ctl" -D "$data" -m fast -w stop >/dev/null 2>&1 || true
+    rm -rf "$data"
+}
+trap stop EXIT INT TERM
+
+as_pg "$pgbin/initdb" -D "$data" -A trust -U postgres -E UTF8 --locale=C.UTF-8 >/dev/null
+as_pg "$pgbin/pg_ctl" -D "$data" -w -l "$data/server.log" \
+    -o "-c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp -c fsync=${PG_FSYNC:-on}" \
+    start >/dev/null ||
+    { cat "$data/server.log" >&2; exit 1; }
+
+psql -q -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+    -c "CREATE ROLE gnc LOGIN CREATEDB PASSWORD 'gnc'" \
+    -c "CREATE DATABASE gnctest OWNER gnc"
+
+GCSE_PG_URL="postgres://gnc:gnc@127.0.0.1"
+TEST_PGSQL_URL="$GCSE_PG_URL/gnctest"
+export GCSE_PG_URL TEST_PGSQL_URL
+
+set +e
+"$@"
+status=$?
+set -e
+exit "$status"

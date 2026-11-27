@@ -95,7 +95,10 @@ görs om från C till C++.
 - SQL-backenden skriver ett objekt i taget. Ett kommando som rör flera objekt (en fakturabokning) är därför
   inte atomärt i databasen i dag.
 - Bokens KVP-rader skrivs om allihop vid varje bokändring, alltså vid varje fakturanummer och varje
-  historikhändelse. Uppskattat till tusentals SQL-satser per gång med en BAS-kontoplan. Inte mätt än.
+  historikhändelse. Uppmätt i steg 1: 1–2 s per bokändring i SQLite och PostgreSQL med 1 300 konton
+  ([design 05](design/05-serverarkitektur.md)).
+- Laddtid och minne växer med boken: 31 s och 444 MB för 50 000 verifikationer från PostgreSQL, varav motorn
+  själv 12 s och 320 MB. Vanliga skrivningar och rapportläsningar är snabba (15 ms respektive under 200 ms).
 - Utan GTK är 91 av de tidigare 141 testerna kvar (alla gröna 2026-11-27, se [`byggmiljo.md`](byggmiljo.md)).
   De 50 som försvann är rapporter (31), import (13) och GTK (6).
 - Guile krävs fortfarande av bygget men länkas inte in i servern.
@@ -111,8 +114,9 @@ görs om från C till C++.
 - Befintliga webbprojekt kring GnuCash skriver direkt i databasen och går förbi motorn. De går inte att
   återanvända, eftersom de också skulle gå förbi SE:s lås.
 
-Inte verifierat: att bygget utan GTK fungerar på Windows och macOS (prövat på Linux), hur libdbi beter sig mot PostgreSQL, och om
-namnet "GnuCash" kan användas för ett program utan GnuCash gränssnitt (inte undersökt).
+Verifierat sedan planen skrevs: bygget utan GTK är grönt i CI på Linux, macOS och Windows, och libdbi fungerar
+mot PostgreSQL 18 (men motorn kan inte själv skapa databasen, se design 05). Inte undersökt: om
+namnet "GnuCash" kan användas för ett program utan GnuCash gränssnitt.
 
 ## 4. Arkitektur
 
@@ -159,7 +163,7 @@ Storlek: S, M, L, XL. Varje steg börjar med en designskiss i `docs/design/`.
 | # | Steg | Levererar | Storlek | Största risk |
 |---|---|---|---|---|
 | **0** (byggt 2026-11-27) | Omläggning | GTK ur bygget via eget standardvärde. Krokarna i GTK-filer återställs; `gnc-plugin-se.*` och `util/se/gui-test` tas bort. `distcheck` byts mot `check` i CI, eget arbetsflöde `se-ci.yml`, kontroll att `gnucash/` är identisk med upstream. Katalogen `se/` med licensfiler. Ny baslinje (91 tester). Färdplanen och avvikelselistan skrivs om | S–M | Bygget utan GTK är oprövat på Windows och macOS |
-| 1 | Mätning och arkitektur (K0) | PostgreSQL i byggmiljön, bokgenerator, mätvärden (laddtid, minne, tid per bokändring, libdbi mot PostgreSQL). `docs/design/05-serverarkitektur.md` med gränsvärdena för K1 | M | libdbi mot PostgreSQL |
+| **1** (mätt 2026-11-27, [design 05](design/05-serverarkitektur.md)) | Mätning och arkitektur (K0) | PostgreSQL i byggmiljön, bokgenerator, mätvärden (laddtid, minne, tid per bokändring, libdbi mot PostgreSQL). `docs/design/05-serverarkitektur.md` med gränsvärdena för K1 | M | libdbi mot PostgreSQL |
 | 2 | Motorn för server | Kommandotransaktion i SQL-backenden, aktör per kommando, löpnummer per registrering (`se/seq`), fasta inställningar och språk per bokvärd. Historiken till egna tabeller om K0 kräver det | M | De sista nya krokarna i motorn. Bör vara klart före upstreams frysning |
 | 3 | Kommandolager v1 | Kontoplan, verifikation med flervaluta, lås, rättelse, räkenskapsår med bokslutsomföring, historik, frågor för rapporterna | L | Att motorns egenheter läcker ut i API:t |
 | 4 | Bokvärd, API v1 och CLI | HTTP-server, OpenAPI, ETag, kontraktstester, `gcse` | L | Handskriven HTTP-kod |

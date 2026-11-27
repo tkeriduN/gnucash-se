@@ -16,6 +16,7 @@ Här ligger allt som GnuCash SE lägger ovanpå bokföringsmotorn. Katalogen fin
 | `web/` | webbklienten (SvelteKit) | planerat |
 | `api/` | `openapi.yaml`, källan för API:t | planerat |
 | `test/` | tester för hela kedjan | planerat |
+| `tools/` | utvecklingsverktyg: `gcse-bench` genererar en bok och mäter motorn med den | finns |
 
 Planen står i [`../docs/fardplan.md`](../docs/fardplan.md).
 

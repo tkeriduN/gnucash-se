@@ -1,0 +1,58 @@
+#!/bin/sh
+# Mät motorn med en genererad bok mot XML, SQLite och PostgreSQL. Samma skript används vid
+# varje mätning (K0 i steg 1, K1 före fakturorna), så att siffrorna går att jämföra.
+#
+# Körs INNE i byggcontainern, från byggkatalogen, med en tillfällig PostgreSQL-server:
+#
+#   cd .build/future
+#   ../../util/se/future-env ../../util/se/pg-env ../../util/se/bench-all full
+#
+# Storlekar:
+#   small   1 300 konton, 1 år, 2 000 verifikationer
+#   full    1 300 konton, 5 år, 50 000 verifikationer (måttet för kontrollpunkten)
+# BENCH_OPS anger hur många gånger varje skrivning upprepas (standard 30).
+# BENCH_BACKENDS väljer lagring, t.ex. "sqlite3 postgres" (standard: alla tre).
+set -eu
+
+size=${1:-full}
+case "$size" in
+    small) gen="--accounts=1300 --years=1 --per-year=2000" ;;
+    full)  gen="--accounts=1300 --years=5 --per-year=10000" ;;
+    *) echo "bench-all: okänd storlek $size (small eller full)" >&2; exit 2 ;;
+esac
+ops=${BENCH_OPS:-30}
+backends=${BENCH_BACKENDS:-xml sqlite3 postgres}
+
+[ -x bin/gcse-bench ] || { echo "bench-all: bin/gcse-bench saknas; kör från byggkatalogen" >&2; exit 1; }
+export GNC_UNINSTALLED=YES GNC_BUILDDIR="$PWD"
+
+dir=$(mktemp -d /tmp/gcse-bench.XXXXXX)
+trap 'rm -rf "$dir"' EXIT
+
+for backend in $backends; do
+    case "$backend" in
+        xml|sqlite3) uri="$backend://$dir/book-$backend.gnucash" ;;
+        postgres)
+            [ -n "${GCSE_PG_URL:-}" ] || { echo "bench-all: GCSE_PG_URL saknas; kör genom pg-env" >&2; exit 1; }
+            uri="$GCSE_PG_URL/bench_$size"
+            # Motorn kan inte själv skapa databasen med libpq 14 eller senare: dess felhanterare
+            # känner inte igen det nya felmeddelandet för "databasen finns inte" (design 05).
+            psql -q -h 127.0.0.1 -U postgres -c "DROP DATABASE IF EXISTS bench_$size" \
+                -c "CREATE DATABASE bench_$size OWNER gnc" ;;
+        *) echo "bench-all: okänd lagring $backend" >&2; exit 2 ;;
+    esac
+    echo "## $backend, $size"
+    echo
+    # shellcheck disable=SC2086
+    bin/gcse-bench generate "$uri" $gen
+    bin/gcse-bench measure "$uri" --ops="$ops" || echo "(measure slutade med fel)"
+    case "$backend" in
+        xml|sqlite3) echo "storlek på disk: $(du -h "$dir/book-$backend.gnucash" | cut -f1)" ;;
+        postgres)
+            psql -h 127.0.0.1 -U gnc -d "bench_$size" -At \
+                -c "select 'rader i slots: ' || count(*) from slots" \
+                -c "select 'varav SE-historiken i bokens KVP: ' || count(*) from slots where name like 'se/history/%'" \
+                -c "select 'databasens storlek: ' || pg_size_pretty(pg_database_size(current_database()))" ;;
+    esac
+    echo
+done
