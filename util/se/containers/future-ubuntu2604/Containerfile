@@ -21,6 +21,14 @@ RUN apt-get update \
       language-pack-en language-pack-fr \
  && rm -rf /var/lib/apt/lists/*
 
+# GnuCash SE utöver upstreams paketrad (eget lager, så att raden ovan går att jämföra med upstreams CI):
+# PostgreSQL-server och libdbi-drivrutinen för PostgreSQL, för mätningar och tester mot den databas
+# som servern använder (util/se/pg-env startar en tillfällig databas i containern).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libdbd-pgsql postgresql postgresql-client util-linux time \
+ && rm -rf /var/lib/apt/lists/*
+
 # Samma tidszon som upstreams CI; vissa tester är tidszonsberoende.
 ENV TZ=America/Los_Angeles \
     CTEST_OUTPUT_ON_FAILURE=On \
