@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Isak Adamssvärd
+#
+# GnuCash SE's own checks. The workflows inherited from GnuCash build and test
+# the engine; what the fork adds is tested here.
+name: se-ci
+on: [push, pull_request]
+permissions: {}
+jobs:
+  upstream_tree:
+    # The GTK program is not built, and must stay exactly as upstream has it
+    # so that merges of upstream/future never conflict there.
+    name: gnucash/ is identical to upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Compare gnucash/ with the merge base
+        run: |
+          git remote add upstream https://github.com/Gnucash/gnucash.git
+          git fetch --quiet --filter=blob:none upstream future
+          base=$(git merge-base HEAD upstream/future)
+          echo "Merge base with upstream/future: $base"
+          if ! git diff --quiet "$base" HEAD -- gnucash/; then
+            echo "::error::gnucash/ differs from upstream. The fork keeps that directory untouched."
+            git diff --stat "$base" HEAD -- gnucash/
+            exit 1
+          fi
+  gtk_canary:
+    # On a branch that merges upstream, build everything the way upstream does,
+    # to see that what was merged still builds and passes upstream's own tests.
+    name: Full GnuCash build (upstream sync branches)
+    if: startsWith(github.head_ref || github.ref_name, 'chore/sync-upstream-')
+    runs-on: ubuntu-26.04
+    env:
+      TZ: America/Los_Angeles
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - run: sudo apt-get update
+      - name: Install additional dependencies
+        run: sudo apt-get install -y gettext cmake libxslt-dev xsltproc ninja-build libboost-all-dev libgtk-3-dev guile-2.2-dev libgwengui-gtk3-dev libaqbanking-dev libofx-dev libdbi-dev libdbd-sqlite3 libwebkit2gtk-4.1-dev  googletest
+      - name: Install language packs.
+        run: sudo apt-get --reinstall install -y language-pack-en language-pack-fr
+      - name: Configure GnuCash with the GTK program
+        run: |
+          mkdir build
+          cd build
+          cmake -G Ninja -DWITH_GNUCASH=ON -DWITH_PYTHON=ON $GITHUB_WORKSPACE
+      - name: Build and Test GnuCash
+        run: |
+          cd build
+          ninja
+          ninja check
+        env:
+          CTEST_OUTPUT_ON_FAILURE: On
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: TestLog-full
+          path: ${{ github.workspace }}/build/Testing/Temporary/LastTest.log
