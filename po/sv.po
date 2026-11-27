@@ -32292,6 +32292,52 @@ msgstr "Ingen hjälp tillgänglig."
 # filen så att synkningar mot upstream inte krockar med det.
 # ---------------------------------------------------------------------
 
+#, c-format
+msgid "The first day of the fiscal year was set to %s (month-day); it was %02d-%02d."
+msgstr "Räkenskapsårets första dag sattes till %s (månad-dag); den var %02d-%02d."
+
+#, c-format
+msgid "Voucher series %s was added: %s, with continuous numbering."
+msgstr "Verifikationsserie %s lades till: %s, med löpande numrering."
+
+#, c-format
+msgid "Voucher series %s was added: %s, with new numbers every fiscal year."
+msgstr "Verifikationsserie %s lades till: %s, med ny nummerföljd varje räkenskapsår."
+
+#, c-format
+msgid "The voucher series of new transactions was set to %s; it was %s."
+msgstr "Verifikationsserien för nya transaktioner sattes till %s; den var %s."
+
+msgid "Posting may be put off until 50 days after the end of the quarter."
+msgstr "Bokföringen får senareläggas till 50 dagar efter kvartalets utgång."
+
+msgid "Posting may be put off until 50 days after the end of the month."
+msgstr "Bokföringen får senareläggas till 50 dagar efter månadens utgång."
+
+#, c-format
+msgid "Fiscal year %s was set up: %s to %s."
+msgstr "Räkenskapsår %s lades upp: %s till %s."
+
+msgid "The date is not valid."
+msgstr "Datumet är inte giltigt."
+
+msgid "A fiscal year is at most 18 months, and ends after it starts."
+msgstr "Ett räkenskapsår är högst 18 månader, och slutar efter att det börjar."
+
+msgid "The fiscal year is closed and cannot be changed."
+msgstr "Räkenskapsåret är avslutat och kan inte ändras."
+
+msgid "The book is already posted past that day. The fiscal year cannot end before the lock date."
+msgstr "Boken är redan bokförd förbi den dagen. Räkenskapsåret kan inte sluta före låsdatumet."
+
+#, c-format
+msgid "The last day of fiscal year %s was moved from %s to %s."
+msgstr "Sista dagen i räkenskapsår %s flyttades från %s till %s."
+
+#, c-format
+msgid "Fiscal years follow each other. The next one starts on %s."
+msgstr "Räkenskapsåren följer på varandra. Nästa börjar den %s."
+
 msgid "A posted transaction cannot be deleted."
 msgstr "En bokförd transaktion kan inte tas bort."
 
@@ -32307,15 +32353,43 @@ msgstr "Transaktioner bokförs genom att en period låses."
 msgid "The date is in a locked period."
 msgstr "Datumet ligger i en låst period."
 
+msgid "Only a posted transaction is corrected with a correcting entry. A preliminary transaction can be changed as it is."
+msgstr "Bara en bokförd transaktion rättas med en rättelseverifikation. En preliminär transaktion kan ändras som den är."
+
+msgid "A correcting entry is dated in an open period."
+msgstr "En rättelseverifikation dateras i en öppen period."
+
+msgid "A correcting entry says who made it."
+msgstr "En rättelseverifikation ska ange vem som har gjort den."
+
+msgid "The transaction already has a correcting entry."
+msgstr "Transaktionen har redan en rättelseverifikation."
+
+#, c-format
+msgid "Correction of %s: %s"
+msgstr "Rättelse av %s: %s"
+
+msgid "The correcting entry could not be created."
+msgstr "Rättelseverifikationen kunde inte skapas."
+
+#, c-format
+msgid "A correcting entry dated %s was created for %s (%s)."
+msgstr "En rättelseverifikation daterad %s skapades för %s (%s)."
+
+#, c-format
+msgid "Reason: %s"
+msgstr "Anledning: %s"
+
+#, c-format
+msgid "Corrected by %s, dated %s, signed %s."
+msgstr "Rättad genom %s, daterad %s, signatur %s."
+
 #, c-format
 msgid "Posted in GnuCash SE as %s. Correct it with a correcting entry."
 msgstr "Bokförd i GnuCash SE som %s. Rätta den med en rättelseverifikation."
 
 msgid "Vouchers"
 msgstr "Verifikationer"
-
-msgid "The date is not valid."
-msgstr "Datumet är inte giltigt."
 
 msgid "A period cannot be locked before it has ended: the date is after today."
 msgstr "En period kan inte låsas innan den är slut: datumet ligger efter dagens datum."
@@ -32343,311 +32417,31 @@ msgid "A transaction could not be locked. The lock date was not moved."
 msgstr "En transaktion kunde inte låsas. Låsdatumet flyttades inte."
 
 #, c-format
-msgid "Series %s: number %d is missing."
-msgstr "Serie %s: nummer %d saknas."
-
-#, c-format
-msgid "Series %s: numbers %d to %d are missing."
-msgstr "Serie %s: nummer %d till %d saknas."
-
-#, c-format
-msgid "Series %s: number %d is used more than once (%s)."
-msgstr "Serie %s: nummer %d används mer än en gång (%s)."
-
-#, c-format
-msgid "%s (%s) has been changed after it was posted."
-msgstr "%s (%s) har ändrats efter att den bokfördes."
-
-#, c-format
-msgid "Series %s: the last posted transaction does not match what the series has recorded."
-msgstr "Serie %s: den senast bokförda transaktionen stämmer inte med det som serien har antecknat."
-
-#, c-format
-msgid "Series %s: the next number, %d, is lower than a number that is already used."
-msgstr "Serie %s: nästa nummer, %d, är lägre än ett nummer som redan används."
-
-#, c-format
-msgid "There are posted transactions in series %s, which the book does not have."
-msgstr "Det finns bokförda transaktioner i serie %s, som boken inte har."
-
-#, c-format
-msgid "%s (%s) has lost its read-only mark."
-msgstr "%s (%s) har förlorat sitt skrivskydd."
-
-#, c-format
-msgid "%s (%s) is posted but dated after the lock date."
-msgstr "%s (%s) är bokförd men daterad efter låsdatumet."
-
-#, c-format
-msgid "A preliminary transaction is dated in the locked period: %s. Move it to an open period or delete it."
-msgstr "En preliminär transaktion är daterad i den låsta perioden: %s. Flytta den till en öppen period eller ta bort den."
-
-#, c-format
-msgid "And %d more."
-msgstr "… och %d till."
-
-msgid "The voucher series are unbroken and no posted transaction has been changed."
-msgstr "Verifikationsserierna är obrutna och ingen bokförd transaktion har ändrats."
-
-msgid "The posted transactions do not match their voucher series. The book has been changed outside GnuCash SE, or a transaction has been added in a locked period."
-msgstr "De bokförda transaktionerna stämmer inte med sina verifikationsserier. Boken har ändrats utanför GnuCash SE, eller så har en transaktion lagts till i en låst period."
-
-msgid "There are no preliminary transactions up to that date. Only the lock date will be moved."
-msgstr "Det finns inga preliminära transaktioner till och med det datumet. Bara låsdatumet flyttas."
-
-#, c-format
-msgid "%d transaction will be posted:"
-msgid_plural "%d transactions will be posted:"
-msgstr[0] "%d transaktion kommer att bokföras:"
-msgstr[1] "%d transaktioner kommer att bokföras:"
-
-#, c-format
-msgid "%s: %s %d"
-msgstr "%s: %s %d"
-
-#, c-format
-msgid "%s: %s %d to %s %d"
-msgstr "%s: %s %d till %s %d"
-
-msgid "Post Transactions"
-msgstr "Bokför transaktioner"
-
-msgid "_Post"
-msgstr "_Bokför"
-
-msgid "Posting gives the preliminary transactions up to and including a date their voucher numbers, in the order they were entered, and locks them. A posted transaction cannot be changed or deleted; a mistake is corrected with a correcting entry. Posting cannot be undone."
-msgstr "Bokföringen ger de preliminära transaktionerna till och med ett datum deras verifikationsnummer, i den ordning de registrerades, och låser dem. En bokförd transaktion kan inte ändras eller tas bort; ett fel rättas med en rättelseverifikation. Bokföringen kan inte ångras."
-
-#, c-format
-msgid "The book is posted through %s."
-msgstr "Boken är bokförd till och med %s."
-
-msgid "Nothing has been posted in this book yet."
-msgstr "Inget har bokförts i den här boken än."
-
-msgid "Post through:"
-msgstr "Bokför till och med:"
-
-#, c-format
-msgid "%d transaction was posted."
-msgid_plural "%d transactions were posted."
-msgstr[0] "%d transaktion bokfördes."
-msgstr[1] "%d transaktioner bokfördes."
-
-msgid "Save the book to keep the posting."
-msgstr "Spara boken för att behålla bokföringen."
-
-msgid "continuous numbering"
-msgstr "löpande numrering"
-
-msgid "new numbers every fiscal year"
-msgstr "ny nummerföljd varje räkenskapsår"
-
-#, c-format
-msgid "%s - %s (%s)"
-msgstr "%s – %s (%s)"
-
-msgid "None yet. Series A, with new numbers every fiscal year, is created the first time something is posted."
-msgstr "Inga än. Serie A, med ny nummerföljd varje räkenskapsår, skapas första gången något bokförs."
-
-msgid "The code of a voucher series is one to eight letters or digits, and each series has its own."
-msgstr "Koden för en verifikationsserie är en till åtta bokstäver eller siffror, och varje serie har sin egen."
-
-msgid "Voucher Series and Fiscal Year"
-msgstr "Verifikationsserier och räkenskapsår"
-
-msgid "The fiscal year starts on:"
-msgstr "Räkenskapsåret börjar den:"
-
-msgid "50 days after the end of the month"
-msgstr "50 dagar efter månadens utgång"
-
-msgid "50 days after the end of the quarter (turnover at most 3 million kronor)"
-msgstr "50 dagar efter kvartalets utgång (nettoomsättning högst 3 miljoner kronor)"
-
-msgid "Transactions are posted at the latest:"
-msgstr "Transaktioner bokförs senast:"
-
-msgid "Cash payments are always posted the next working day at the latest."
-msgstr "Kontanta betalningar bokförs alltid senast påföljande arbetsdag."
-
-msgid "Voucher series:"
-msgstr "Verifikationsserier:"
-
-msgid "Series of new transactions:"
-msgstr "Serie för nya transaktioner:"
-
-msgid "New numbers every fiscal year"
-msgstr "Ny nummerföljd varje räkenskapsår"
-
-msgid "Continuous numbering"
-msgstr "Löpande numrering"
-
-msgid "New series:"
-msgstr "Ny serie:"
-
-msgid "A series cannot be removed or changed once it has been added."
-msgstr "En serie kan inte tas bort eller ändras när den väl har lagts till."
-
-msgid "That is not a day on which a fiscal year can start."
-msgstr "Det är inte en dag som ett räkenskapsår kan börja på."
-
-#, c-format
-msgid "%d preliminary transaction should have been posted by now."
-msgid_plural "%d preliminary transactions should have been posted by now."
-msgstr[0] "%d preliminär transaktion borde ha varit bokförd vid det här laget."
-msgstr[1] "%d preliminära transaktioner borde ha varit bokförda vid det här laget."
-
-#, c-format
-msgid "The earliest is dated %s."
-msgstr "Den tidigaste är daterad %s."
-
-#, c-format
-msgid "%d of them is a cash payment, which is posted the next working day at the latest."
-msgid_plural "%d of them are cash payments, which are posted the next working day at the latest."
-msgstr[0] "%d av dem är en kontant betalning, som ska bokföras senast påföljande arbetsdag."
-msgstr[1] "%d av dem är kontanta betalningar, som ska bokföras senast påföljande arbetsdag."
-
-msgid "Post them with Actions > Posting > Post Through."
-msgstr "Bokför dem med Åtgärder > Bokföring > Bokför till och med."
-
-msgid "_Posting"
-msgstr "_Bokföring"
-
-msgid "_Post Through…"
-msgstr "_Bokför till och med…"
-
-msgid "Post the preliminary transactions up to a date: number them and lock them"
-msgstr "Bokför de preliminära transaktionerna till och med ett datum: numrera och lås dem"
-
-msgid "_Check Voucher Series"
-msgstr "_Kontrollera verifikationsserier"
-
-msgid "Check that the voucher series are unbroken and that no posted transaction has been changed"
-msgstr "Kontrollera att verifikationsserierna är obrutna och att ingen bokförd transaktion har ändrats"
-
-msgid "Voucher _Series and Fiscal Year…"
-msgstr "Verifikations_serier och räkenskapsår…"
-
-msgid "Set the start of the fiscal year, the voucher series and how long posting may be put off"
-msgstr "Ange räkenskapsårets början, verifikationsserierna och hur länge bokföringen får senareläggas"
-
-msgid "The entered date of the transaction is in a period that has been posted and locked. The date is set to the first day that is open."
-msgstr "Transaktionens datum ligger i en period som är bokförd och låst. Datumet sätts till den första dag som är öppen."
-
-msgid "The entered date of the duplicated transaction is in a period that has been posted and locked."
-msgstr "Den duplicerade transaktionens datum ligger i en period som är bokförd och låst."
-
-msgid "The invoice has been posted in a period that is now locked, so it cannot be unposted. Correct it with a credit note."
-msgstr "Fakturan är bokförd i en period som nu är låst och kan därför inte avregistreras. Rätta den med en kreditnotering."
-
-msgid "The invoice could not be unposted. A payment linked to it may be posted in a locked period."
-msgstr "Fakturan kunde inte avregistreras. En betalning som är kopplad till den kan vara bokförd i en låst period."
-
-#, c-format
-msgid "The scheduled transaction \"%s\" for %s falls in a locked period and was not created. Enter it by hand in an open period and skip this occurrence."
-msgstr "Den schemalagda transaktionen ”%s” för %s hamnar i en låst period och skapades inte. Registrera den för hand i en öppen period och hoppa över den här förekomsten."
-
-msgid "Only a posted transaction is corrected with a correcting entry. A preliminary transaction can be changed as it is."
-msgstr "Bara en bokförd transaktion rättas med en rättelseverifikation. En preliminär transaktion kan ändras som den är."
-
-msgid "A correcting entry is dated in an open period."
-msgstr "En rättelseverifikation dateras i en öppen period."
-
-msgid "A correcting entry says who made it."
-msgstr "En rättelseverifikation ska ange vem som har gjort den."
-
-msgid "The transaction already has a correcting entry."
-msgstr "Transaktionen har redan en rättelseverifikation."
-
-#, c-format
-msgid "Correction of %s: %s"
-msgstr "Rättelse av %s: %s"
-
-msgid "The correcting entry could not be created."
-msgstr "Rättelseverifikationen kunde inte skapas."
-
-#, c-format
-msgid "Corrected by %s, dated %s, signed %s."
-msgstr "Rättad genom %s, daterad %s, signatur %s."
-
-#, c-format
-msgid "%s (%s) is a correcting entry, but the transaction it corrects is missing or not posted."
-msgstr "%s (%s) är en rättelseverifikation, men transaktionen som den rättar saknas eller är inte bokförd."
-
-msgid "The date is in a locked period. A correcting entry is dated in an open period."
-msgstr "Datumet ligger i en låst period. En rättelseverifikation dateras i en öppen period."
-
-msgid "Enter your signature: a correction says who made it."
-msgstr "Ange din signatur: en rättelse ska ange vem som har gjort den."
-
-#, c-format
-msgid "%s already has a correcting entry, %s."
-msgstr "%s har redan en rättelseverifikation, %s."
-
-#, c-format
-msgid "%s already has a correcting entry, which is not posted yet."
-msgstr "%s har redan en rättelseverifikation, som inte är bokförd än."
-
-msgid "Correct a Posted Transaction"
-msgstr "Rätta en bokförd transaktion"
-
-msgid "Create Correcting _Entry"
-msgstr "Skapa _rättelseverifikation"
-
-#, c-format
-msgid "%s (%s) is posted and cannot be changed. A correcting entry takes it back with a voucher of its own, and the two refer to each other."
-msgstr "%s (%s) är bokförd och kan inte ändras. En rättelseverifikation tar tillbaka den med en egen verifikation, och de två hänvisar till varandra."
-
-msgid "Date of the correcting entry:"
-msgstr "Rättelseverifikationens datum:"
-
-msgid "Your signature:"
-msgstr "Din signatur:"
-
-msgid "Reason:"
-msgstr "Anledning:"
-
-msgid "Also create a _copy of the original to put right"
-msgstr "Skapa också en _kopia av originalet att rätta"
-
-#, c-format
-msgid "The first day of the fiscal year was set to %s (month-day); it was %02d-%02d."
-msgstr "Räkenskapsårets första dag sattes till %s (månad-dag); den var %02d-%02d."
-
-#, c-format
-msgid "Voucher series %s was added: %s, with continuous numbering."
-msgstr "Verifikationsserie %s lades till: %s, med löpande numrering."
-
-#, c-format
-msgid "Voucher series %s was added: %s, with new numbers every fiscal year."
-msgstr "Verifikationsserie %s lades till: %s, med ny nummerföljd varje räkenskapsår."
-
-#, c-format
-msgid "The voucher series of new transactions was set to %s; it was %s."
-msgstr "Verifikationsserien för nya transaktioner sattes till %s; den var %s."
-
-msgid "Posting may be put off until 50 days after the end of the quarter."
-msgstr "Bokföringen får senareläggas till 50 dagar efter kvartalets utgång."
-
-msgid "Posting may be put off until 50 days after the end of the month."
-msgstr "Bokföringen får senareläggas till 50 dagar efter månadens utgång."
-
-#, c-format
-msgid "A correcting entry dated %s was created for %s (%s)."
-msgstr "En rättelseverifikation daterad %s skapades för %s (%s)."
-
-#, c-format
-msgid "Reason: %s"
-msgstr "Anledning: %s"
-
-#, c-format
 msgid "The book was posted through %s. No transactions were numbered."
 msgstr "Boken bokfördes till och med %s. Inga transaktioner numrerades."
 
 #, c-format
 msgid "The book was posted through %s. Numbered: %s."
 msgstr "Boken bokfördes till och med %s. Numrerat: %s."
+
+msgid "Closing a fiscal year takes a signature."
+msgstr "Att avsluta ett räkenskapsår kräver en signatur."
+
+#, c-format
+msgid "Fiscal year %s is already closed."
+msgstr "Räkenskapsår %s är redan avslutat."
+
+#, c-format
+msgid "Fiscal year %s has not ended yet."
+msgstr "Räkenskapsår %s är inte slut än."
+
+#, c-format
+msgid "Fiscal year %s is still open. Close it first."
+msgstr "Räkenskapsår %s är fortfarande öppet. Avsluta det först."
+
+#, c-format
+msgid "Fiscal year %s, %s to %s, was closed."
+msgstr "Räkenskapsår %s, %s till %s, avslutades."
 
 #, c-format
 msgid "%s (%s), under %s"
@@ -32702,6 +32496,9 @@ msgstr "Bok %s. Framställd %s med %s."
 msgid "Entries: number, time, kind, signature, what happened"
 msgstr "Händelser: nummer, tid, slag, signatur, vad som hände"
 
+msgid "Fiscal years: key, first day, last day, closed"
+msgstr "Räkenskapsår: nyckel, första dag, sista dag, avslutat"
+
 msgid "Posted transactions: voucher, date, entered, posted, description, correction"
 msgstr "Bokförda transaktioner: verifikation, datum, registrerad, bokförd, beskrivning, rättelse"
 
@@ -32713,139 +32510,13 @@ msgstr "Serie %s, period %s"
 msgid "corrects %s, signed %s"
 msgstr "rättar %s, signatur %s"
 
-#, c-format
-msgid "corrected by %s"
-msgstr "rättad genom %s"
-
 msgid "has a correcting entry that is not posted yet"
 msgstr "har en rättelseverifikation som inte är bokförd än"
 
 #, c-format
-msgid "The processing history has been changed: entry %d is missing or altered."
-msgstr "Behandlingshistoriken har ändrats: händelse %d saknas eller är ändrad."
-
-msgid "Enter your signature to post."
-msgstr "Ange din signatur för att bokföra."
-
-msgid "Save the Processing History"
-msgstr "Spara behandlingshistoriken"
-
-msgid "Processing History"
-msgstr "Behandlingshistorik"
-
-msgid "Processing _History…"
-msgstr "Behandlings_historik…"
-
-msgid "Show what has been done to the book: periods posted, corrections, changed settings, accounts and tax tables"
-msgstr "Visa vad som har gjorts med boken: bokförda perioder, rättelser, ändrade inställningar, konton och momstabeller"
-
-msgid "_Save As…"
-msgstr "Spara _som…"
+msgid "corrected by %s"
+msgstr "rättad genom %s"
 
 #, c-format
-msgid "Fiscal year %s was set up: %s to %s."
-msgstr "Räkenskapsår %s lades upp: %s till %s."
-
-msgid "A fiscal year is at most 18 months, and ends after it starts."
-msgstr "Ett räkenskapsår är högst 18 månader, och slutar efter att det börjar."
-
-msgid "The fiscal year is closed and cannot be changed."
-msgstr "Räkenskapsåret är avslutat och kan inte ändras."
-
-msgid "The book is already posted past that day. The fiscal year cannot end before the lock date."
-msgstr "Boken är redan bokförd förbi den dagen. Räkenskapsåret kan inte sluta före låsdatumet."
-
-#, c-format
-msgid "The last day of fiscal year %s was moved from %s to %s."
-msgstr "Sista dagen i räkenskapsår %s flyttades från %s till %s."
-
-#, c-format
-msgid "Fiscal years follow each other. The next one starts on %s."
-msgstr "Räkenskapsåren följer på varandra. Nästa börjar den %s."
-
-msgid "Closing a fiscal year takes a signature."
-msgstr "Att avsluta ett räkenskapsår kräver en signatur."
-
-#, c-format
-msgid "Fiscal year %s is already closed."
-msgstr "Räkenskapsår %s är redan avslutat."
-
-#, c-format
-msgid "Fiscal year %s has not ended yet."
-msgstr "Räkenskapsår %s är inte slut än."
-
-#, c-format
-msgid "Fiscal year %s is still open. Close it first."
-msgstr "Räkenskapsår %s är fortfarande öppet. Avsluta det först."
-
-#, c-format
-msgid "Fiscal year %s, %s to %s, was closed."
-msgstr "Räkenskapsår %s, %s till %s, avslutades."
-
-msgid "Fiscal years: key, first day, last day, closed"
-msgstr "Räkenskapsår: nyckel, första dag, sista dag, avslutat"
-
-#, c-format
-msgid "%s (%s) is numbered in another fiscal year than the one its date lies in."
-msgstr "%s (%s) är numrerad i ett annat räkenskapsår än det som datumet ligger i."
-
-#, c-format
-msgid "%s: %s to %s"
-msgstr "%s: %s till %s"
-
-#, c-format
-msgid ", closed by %s"
-msgstr ", avslutat av %s"
-
-msgid "None yet. Twelve-month years from the day above are set up when something is posted. Define the first year here if it is shorter or longer."
-msgstr "Inga än. Tolvmånadersår från dagen ovan läggs upp när något bokförs. Ange det första året här om det är kortare eller längre."
-
-msgid "Define or Change a Fiscal Year"
-msgstr "Ange eller ändra ett räkenskapsår"
-
-msgid "Enter the first and the last day of the book's first fiscal year. A fiscal year is at most 18 months."
-msgstr "Ange första och sista dagen i bokens första räkenskapsår. Ett räkenskapsår är högst 18 månader."
-
-msgid "To move the last day of the latest fiscal year, keep its first day and change the last. To add the next year, enter the day after the latest year ends as the first day. A fiscal year is at most 18 months."
-msgstr "För att flytta sista dagen i det senaste räkenskapsåret: behåll första dagen och ändra den sista. För att lägga till nästa år: ange dagen efter att det senaste året slutar som första dag. Ett räkenskapsår är högst 18 månader."
-
-msgid "First day:"
-msgstr "Första dag:"
-
-msgid "Last day:"
-msgstr "Sista dag:"
-
-msgid "_Define or Change a Fiscal Year…"
-msgstr "_Ange eller ändra ett räkenskapsår…"
-
-msgid "Fiscal years:"
-msgstr "Räkenskapsår:"
-
-msgid "The fiscal year has not ended yet, so it cannot be closed."
-msgstr "Räkenskapsåret är inte slut än och kan därför inte avslutas."
-
-msgid "The year is already posted through its last day."
-msgstr "Året är redan bokfört till och med sin sista dag."
-
-msgid "Close Fiscal Year"
-msgstr "Avsluta räkenskapsår"
-
-msgid "Close the _Year"
-msgstr "Avsluta _året"
-
-#, c-format
-msgid "Fiscal year %s, %s to %s. Closing it posts everything up to its last day and marks the year closed. Make the closing entries first: a closed year cannot be changed, and what is posted can only be corrected with correcting entries."
-msgstr "Räkenskapsår %s, %s till %s. När det avslutas bokförs allt till och med dess sista dag och året markeras som avslutat. Gör bokslutsposterna först: ett avslutat år kan inte ändras, och det som är bokfört kan bara rättas med rättelseverifikationer."
-
-#, c-format
-msgid "Fiscal year %s is closed."
-msgstr "Räkenskapsår %s är avslutat."
-
-msgid "Close _Fiscal Year…"
-msgstr "Avsluta _räkenskapsår…"
-
-msgid "Post everything up to the last day of the fiscal year and mark the year closed"
-msgstr "Bokför allt till och med räkenskapsårets sista dag och markera året som avslutat"
-
-msgid "Set the fiscal years, the voucher series and how long posting may be put off"
-msgstr "Ange räkenskapsåren, verifikationsserierna och hur länge bokföringen får senareläggas"
+msgid "The scheduled transaction \"%s\" for %s falls in a locked period and was not created. Enter it by hand in an open period and skip this occurrence."
+msgstr "Den schemalagda transaktionen ”%s” för %s hamnar i en låst period och skapades inte. Registrera den för hand i en öppen period och hoppa över den här förekomsten."
