@@ -42,7 +42,6 @@ set (gnc_gnome_noinst_HEADERS
   gnc-plugin-business.h
   gnc-plugin-register.h
   gnc-plugin-report-system.h
-  gnc-plugin-se.h
   gnc-plugin-page-account-tree.h
   gnc-plugin-page-budget.h
   gnc-plugin-page-invoice.h
@@ -114,7 +113,6 @@ set (gnc_gnome_SOURCES
   gnc-plugin-business.c
   gnc-plugin-register.c
   gnc-plugin-report-system.c
-  gnc-plugin-se.cpp
   gnc-plugin-page-account-tree.cpp
   gnc-plugin-page-budget.cpp
   gnc-plugin-page-invoice.cpp

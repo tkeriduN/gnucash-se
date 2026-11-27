@@ -87,8 +87,6 @@
 #include "engine-helpers.h"
 #include "qofbookslots.h"
 #include "gnc-gtk-utils.h"
-#include "gnc-se.h" /* GnuCash SE */
-#include "gnc-plugin-se.h" /* GnuCash SE */
 
 /* gschema: org.gnucash.GnuCash.general.register.JumpMultipleSplits */
 typedef enum : gint
@@ -2560,19 +2558,8 @@ gnc_plugin_page_register_cmd_reverse_transaction (GSimpleAction *simple,
         return;
     }
 
-    /* GnuCash SE: a posted transaction is corrected with a correcting
-     * entry, which says who made it and why. */
-    if (gnc_se_trans_is_locked (trans))
-    {
-        new_trans = gnc_plugin_se_correct_transaction (GTK_WINDOW (window),
-                                                       trans);
-        if (!new_trans)
-        {
-            LEAVE ("correction cancelled");
-            return;
-        }
-    }
-    else if ((new_trans = xaccTransGetReversedBy (trans)))
+    new_trans = xaccTransGetReversedBy (trans);
+    if (new_trans)
     {
         const char *rev = _("A reversing entry has already been created for this transaction.");
         const char *jump = _("Jump to the transaction?");

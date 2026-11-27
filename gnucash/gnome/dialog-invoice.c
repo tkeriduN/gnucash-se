@@ -78,7 +78,6 @@
 #include "dialog-transfer.h"
 #include "gnc-uri-utils.h"
 #include "gnc-report-combo.h"
-#include "gnc-se.h" /* GnuCash SE */
 
 #define DIALOG_NEW_INVOICE_CM_CLASS "dialog-new-invoice"
 #define DIALOG_VIEW_INVOICE_CM_CLASS "dialog-view-invoice"
@@ -1322,17 +1321,6 @@ gnc_invoice_window_unpostCB (GtkWidget *widget, gpointer data)
     if (!invoice)
         return;
 
-    /* GnuCash SE: a posted and locked invoice stays as it is. */
-    if (gncInvoiceGetPostedTxn (invoice) &&
-        gnc_se_trans_is_locked (gncInvoiceGetPostedTxn (invoice)))
-    {
-        gnc_error_dialog (GTK_WINDOW (iw_get_window (iw)), "%s",
-                          _("The invoice has been posted in a period that is "
-                            "now locked, so it cannot be unposted. Correct it "
-                            "with a credit note."));
-        return;
-    }
-
     /* make sure the user REALLY wants to do this! */
     result = iw_ask_unpost(iw);
     if (!result) return;
@@ -1341,14 +1329,7 @@ gnc_invoice_window_unpostCB (GtkWidget *widget, gpointer data)
     gnc_suspend_gui_refresh ();
     result = gncInvoiceUnpost (invoice, iw->reset_tax_tables);
     gnc_resume_gui_refresh ();
-    if (!result)
-    {
-        /* GnuCash SE: the usual reason is a locked payment link. */
-        gnc_error_dialog (GTK_WINDOW (iw_get_window (iw)), "%s",
-                          _("The invoice could not be unposted. A payment "
-                            "linked to it may be posted in a locked period."));
-        return;
-    }
+    if (!result) return;
 
     /* if we get here, we succeeded in unposting -- reset the ledger and redisplay */
     iw->dialog_type = EDIT_INVOICE;
