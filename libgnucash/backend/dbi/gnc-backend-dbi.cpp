@@ -716,6 +716,10 @@ GncDbiBackend<Type>::session_begin (QofSession* session, const char* new_uri,
             LEAVE("Error");
             return;
         }
+        /* GnuCash SE: with a database that is already there and empty the
+         * first connection is still open here, and was never closed. */
+        if (m_exists)
+            dbi_conn_close(conn);
         conn = conn_setup(options, uri);
         result = dbi_conn_connect (conn);
         if (result < 0)
