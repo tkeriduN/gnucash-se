@@ -17,7 +17,9 @@ target_link_libraries (gcse-bench PRIVATE gnc-engine PkgConfig::GLIB2)
 # as the engine changes. The backends are found through the build tree.
 if (WITH_SQL)
   add_test (NAME test-gcse-bench COMMAND gcse-bench selftest)
+  # The same environment as gnc_add_test() gives the engine's tests,
+  # including its sanitizer options: leaks are only reported with -D LEAKS=ON.
   set_tests_properties (test-gcse-bench PROPERTIES
-    ENVIRONMENT "GNC_UNINSTALLED=YES;GNC_BUILDDIR=${CMAKE_BINARY_DIR}")
+    ENVIRONMENT "GNC_UNINSTALLED=YES;GNC_BUILDDIR=${CMAKE_BINARY_DIR}$<$<CONFIG:Asan>:;ASAN_OPTIONS=${ASAN_TEST_OPTIONS}>")
   add_dependencies (check gcse-bench)
 endif()
