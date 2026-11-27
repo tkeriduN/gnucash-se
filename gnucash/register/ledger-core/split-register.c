@@ -52,7 +52,6 @@
 #include "dialog-dup-trans.h"
 #include "engine-helpers.h"
 #include "qofbookslots.h"
-#include "gnc-se.h" /* GnuCash SE */
 
 
 /** static variables ******************************************************/
@@ -666,11 +665,6 @@ gnc_split_register_duplicate_current (SplitRegister* reg)
                                                             GTK_MESSAGE_ERROR,
                                                             GTK_BUTTONS_OK,
                                                             "%s", _ ("Cannot store a transaction at this date"));
-                /* GnuCash SE: say so when it is the lock date that stops it. */
-                if (gnc_se_book_date_is_locked (gnc_get_current_book (), &d))
-                    gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
-                                                              "%s", _ ("The entered date of the duplicated transaction is in a period that has been posted and locked."));
-                else
                 gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
                                                           "%s", _ ("The entered date of the duplicated transaction is older than the \"Read-Only Threshold\" set for this book. "
                                                                    "This setting can be changed in File->Properties->Accounts."));

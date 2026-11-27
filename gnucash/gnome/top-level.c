@@ -72,7 +72,6 @@
 #include "window-report.h"
 #include "gnc-window.h"
 #include "gnc-gkeyfile-utils.h"
-#include "gnc-plugin-se.h" /* GnuCash SE */
 
 
 /** GLOBALS *********************************************************/
@@ -441,9 +440,6 @@ gnc_main_gui_init (void)
         gnc_plugin_manager_get (), gnc_plugin_register_new ());
     gnc_plugin_manager_add_plugin (
         gnc_plugin_manager_get (), gnc_plugin_business_new ());
-    /* GnuCash SE: Actions > Posting */
-    gnc_plugin_manager_add_plugin (
-        gnc_plugin_manager_get (), gnc_plugin_se_new ());
     /* I'm not sure why the FIXME note says to remove this.  Maybe
        each module should be adding its own plugin to the manager?
        Anyway... Oh, maybe... nah */

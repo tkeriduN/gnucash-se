@@ -30,7 +30,8 @@ jobs:
         run: |
           cd build
           ninja
-          ninja distcheck
+          # GnuCash SE: distcheck needs the GTK program, which is not built here.
+          ninja check
         env:
           CTEST_OUTPUT_ON_FAILURE: On
       - uses: actions/upload-artifact@v7

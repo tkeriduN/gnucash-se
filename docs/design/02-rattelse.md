@@ -2,6 +2,9 @@
 
 Status: **byggt 2026-11-26** på grenen `feat/correction`. Bygger på design 01 (lås och numrering).
 
+> **2026-11-27:** GTK-gränssnittet som beskrivs här är borttaget (steg 0 i [färdplanen](../fardplan.md)); motorn gäller oförändrat.
+> Avsnitten om gränssnitt och provkörning beskriver det som fanns till och med `50fe4e5fa7` och är förlaga för webbklienten.
+
 ## 1. Vad lagen kräver och vad funktionen gör
 
 | Krav | Källa (se `../svenska-krav.md`, avsnitt A2) | Funktion i SE |

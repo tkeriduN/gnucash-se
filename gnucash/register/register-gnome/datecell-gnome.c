@@ -45,7 +45,6 @@
 #include "gnucash-item-edit.h"
 #include "gnucash-sheet.h"
 #include "gnucash-sheetP.h"
-#include "gnc-se.h" /* GnuCash SE */
 
 
 #define DATE_BUF (MAX_DATE_LENGTH+1)
@@ -104,11 +103,6 @@ check_readonly_threshold (const gchar *datestr, GDate *d, gboolean warn)
                           "this book. This setting can be changed in "
                           "File->Properties->Accounts, resetting to the threshold.");
             gchar *dialog_title = _("Cannot store a transaction at this date");
-            /* GnuCash SE: say so when it is the lock date that stops it. */
-            if (gnc_se_book_date_is_locked (gnc_get_current_book (), d))
-                dialog_msg = _("The entered date of the transaction is in a "
-                               "period that has been posted and locked. The "
-                               "date is set to the first day that is open.");
             GtkWidget *dialog = gtk_message_dialog_new(gnc_ui_get_main_window (NULL),
                                    0,
                                    GTK_MESSAGE_ERROR,
