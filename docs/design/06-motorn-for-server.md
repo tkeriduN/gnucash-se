@@ -1,16 +1,17 @@
 # Design 06 – motorn för server
 
-Status: **utkast 2026-11-27** på grenen `feat/server-engine` (steg 2 i [färdplanen](../fardplan.md)). Bygger på
-mätningen i [design 05](05-serverarkitektur.md), avsnitt 2 och 6.
+Status: **byggt 2026-11-27** på grenen `feat/server-engine` (steg 2 i [färdplanen](../fardplan.md)). Bygger på
+mätningen i [design 05](05-serverarkitektur.md); resultatet står i dess avsnitt 2.6 och sammanfattas i
+avsnitt 12 här.
 
 ## 1. Vad steget ska åstadkomma
 
 Mätningen visade fyra saker som måste ändras i motorn och SE-modulen innan kommandolagret byggs ovanpå:
 
-| Problem (design 05) | Uppmätt | Mål efter steget |
+| Problem (design 05) | Uppmätt i ooptimerat bygge | Mål efter steget |
 |---|---|---|
 | Varje ändring av boken själv skriver om alla bokens KVP-ramar | 1,8–2,1 s per fakturanummer eller historikhändelse (PostgreSQL, 1 300 konton) | under 50 ms |
-| Låsning går igenom alla transaktioner i boken | 8,3 s för 20 verifikationer i en bok med 50 000 | i proportion till det som låses |
+| Låsning går igenom alla transaktioner i boken | 8,3 s för ca 790 verifikationer i en bok med 50 000 | i proportion till det som låses |
 | SE:s uppgifter på varje verifikation fördyrar laddningen | +19 s och +120 MB vid 50 000 verifikationer | nära motorns egna 12 s och 320 MB |
 | Minnet växer vid varje bokändring i SQL | 2–3,5 MB per ändring | ingen tillväxt |
 
@@ -128,14 +129,26 @@ Det kräver ingen ändring i `QofBackend`; kroken ligger i den nya filen i SQL-b
 
 ## 8. Minnesläckan i SQL-backenden
 
-ASAN-jobbet pekar ut resultaten av SELECT-frågor (`GncDbiSqlConnection::execute_select_statement()`), samt
-kopior av GUID och tal, som aldrig frigörs. Felet finns i upstreams kod och rättas där det sitter, med en rad
-i avvikelselistan. Mäts med `gcse-bench` i ett ASAN-bygge med läckagekontroll (`-D LEAKS=ON`).
+`GncSqlResultPtr`, resultatet av en SELECT, var en vanlig pekare som anroparen äger. Av ett trettiotal
+anropare frigjorde tre det. Allt som lästes när en bok laddades läckte, liksom ett eller flera resultat för
+varje objekt som sparades: uppmätt till 5–6 kB per sparad ändring.
+
+Rättningen är att göra `GncSqlResultPtr` till en `std::unique_ptr`. Anroparna använder resultatet genom
+`auto`, `->`, `*` och jämförelse med `nullptr`, så bara de tre som frigjorde för hand ändras, plus testets
+attrapp för anslutningen. Felet finns även i vanlig GnuCash.
+
+ASAN-jobbet visar också mindre läckor av kopierade värden (GUID, tal, texter) när ett objekt skrivs
+(`add_to_query` i `gnc-sql-column-table-entry.cpp`). De är kvar: efter rättningen ovan syns ingen tillväxt i
+mätningen (45 MB före och efter 2 000 skrivningar av varje slag).
 
 ## 9. Det som inte görs här
 
 - Fasta inställningar (`gnc-prefs`) och fast språk per bokvärd hör till bokvärden och byggs med den (steg 4).
 - Felhanteraren för PostgreSQL (design 05, avsnitt 3) lämnas; servern skapar databasen själv.
+- `gnc_se_verify()` går fortfarande igenom hela boken. I optimerat bygge tar den 0,6 s för 10 000
+  verifikationer och 3,0 s för 50 000, vilket räcker för en uttrycklig kontroll. Tiden går till att räkna om
+  varje verifikations kontrollsumma.
+- Transaktionsloggen (`TransLog`) skrivs fortfarande av motorn om den inte stängs av; bokvärden stänger av den.
 
 ## 10. Ordning och kontroll
 
@@ -152,8 +165,33 @@ Efter varje punkt: `test-gnc-se` och hela sviten, och den lilla mätningen.
 
 | Fil | Krok |
 |---|---|
-| `libgnucash/backend/sql/CMakeLists.txt` | den nya källfilen `gnc-se-sql.cpp` |
-| `libgnucash/backend/sql/gnc-sql-backend.cpp` | registrering av objektbackenden, och ett anrop först i `sync()` |
-| `libgnucash/backend/dbi/gnc-dbisqlconnection.cpp` eller `gnc-dbisqlresult.cpp` | rättning av läckan (när den är lokaliserad) |
+| `libgnucash/backend/sql/CMakeLists.txt` | de nya källfilerna `gnc-se-sql.cpp` och `gnc-se-sql.h` |
+| `libgnucash/backend/sql/gnc-sql-backend.cpp`, `.hpp` | registrering av objektbackenden, ett anrop först i `sync()`, och tre funktioner som skickar transaktioner vidare till anslutningen |
+| `libgnucash/backend/sql/gnc-sql-connection.hpp`, `gnc-sql-backend.hpp`, `gnc-slots-sql.cpp`, `gnc-bill-term-sql.cpp`, `test/utest-gnc-backend-sql.cpp` | `GncSqlResultPtr` som `std::unique_ptr` (avsnitt 8) |
 
-Alla förs in i `docs/avvikelser-mot-upstream.md` när de finns.
+Alla står i `docs/avvikelser-mot-upstream.md`.
+
+## 12. Resultat
+
+Mätt med `bench-all` i optimerat bygge mot PostgreSQL (hela tabellen i design 05, avsnitt 2.6):
+
+| Mål (avsnitt 1) | Utfall |
+|---|---|
+| Bokändring under 50 ms | 10–22 ms (fakturanummer, namnbyte på konto), oavsett bokens storlek |
+| Låsning i proportion till det som låses | 2,7–3,3 ms per verifikation, lika i en bok med 10 000 som med 50 000 |
+| SE:s del av laddningen | laddningen från PostgreSQL gick från 31 s till 19 s i ooptimerat bygge; 7,9 s i optimerat. Ingen jämförelse mot en bok utan SE-data är gjord efter steget |
+| Ingen minnestillväxt | 45 MB före och efter 2 000 skrivningar av varje slag (131 MB före rättningen) |
+
+Tester: `test-gnc-se` har 72 testfall (60 före steget), bland dem historiken i SQL och i XML, en historik som
+kortats, ett kommando som rullas tillbaka, registreringsordningen och registret över olåsta verifikationer.
+Hela sviten: 92 av 92.
+
+Kända begränsningar:
+
+- Böcker från före steget läses inte som SE-böcker (avsnitt 3.3).
+- En databas som sparas om från vanlig GnuCash ("Spara som") får inte med sig historikens tabeller.
+- Efter `gnc_se_command_rollback()` stämmer minnet inte med databasen; boken måste laddas om (design 05,
+  avsnitt 4.2).
+- Registret över olåsta verifikationer bygger på att vakten ser varje sparad transaktion. Det byggs om när en
+  bok laddas eller vakten sätts upp, och `gnc_se_verify()` hittar en olåst verifikation i låst period oavsett
+  registret.

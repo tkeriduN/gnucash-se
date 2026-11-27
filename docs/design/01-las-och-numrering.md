@@ -7,6 +7,9 @@ Skissen granskades av Isak 2026-11-26; besluten står i avsnitt 9. Kodhänvisnin
 
 > **2026-11-27:** GTK-gränssnittet som beskrivs här är borttaget (steg 0 i [färdplanen](../fardplan.md)); motorn gäller oförändrat.
 > Avsnitten om gränssnitt och provkörning beskriver det som fanns till och med `50fe4e5fa7` och är förlaga för webbklienten.
+>
+> **Lagringen är ändrad i [design 06](06-motorn-for-server.md):** sökvägarna `se/a/b` nedan är nu platta nycklar `se-a:b`,
+> och med SQL ligger behandlingshistoriken i egna tabeller.
 
 ## 1. Vad lagen kräver och vad funktionen ska göra
 

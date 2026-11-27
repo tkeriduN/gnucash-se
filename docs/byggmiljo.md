@@ -67,9 +67,27 @@ Utvecklingsservern delas med produktionssiter: högst 4 jobb och ett bygge i tag
 ```sh
 cd .build/future
 ../../util/se/future-env ../../util/se/pg-env ctest -R test-backend-dbi --output-on-failure
-../../util/se/future-env ../../util/se/pg-env ../../util/se/bench-all small    # ca 1 min
-../../util/se/future-env ../../util/se/pg-env ../../util/se/bench-all full     # ca 25 min
 ```
+
+**Mät i ett optimerat bygge.** Standardbygget i `.build/future` har ingen byggtyp och därmed ingen
+kompilatoroptimering; det är bra för felsökning men flera gånger långsammare i allt som är beräkning.
+Mätningarna görs i ett eget bygge bredvid:
+
+```sh
+mkdir -p .build/release
+FUTURE_BUILD=release util/se/future-env cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo ../..
+FUTURE_BUILD=release util/se/future-env ninja -j4
+FUTURE_BUILD=release util/se/future-env ../../util/se/pg-env ../../util/se/bench-all medium   # ca 2 min
+FUTURE_BUILD=release util/se/future-env ../../util/se/pg-env ../../util/se/bench-all full     # ca 10 min
+```
+
+Storlekarna är `small` (2 000 verifikationer), `medium` (10 000) och `full` (50 000), alla med 1 300 konton.
+`bench-all` skriver ut byggtypen först.
+
+Imagen har också valgrind. Profilera en del av en körning med t.ex.
+`valgrind --tool=callgrind --toggle-collect='gnc_se_lock_through*' bin/gcse-bench measure <URI>` och läs
+resultatet med `callgrind_annotate --inclusive=yes`. SQL-satserna en körning skickar syns med
+`PG_OPTIONS="-c log_statement=all -c log_duration=on"` till `pg-env`; loggens sökväg finns i `$PG_ENV_LOG`.
 
 Mätprogrammet är `bin/gcse-bench` (`se/tools/gcse-bench.cpp`); resultat och tolkning står i
 [`design/05-serverarkitektur.md`](design/05-serverarkitektur.md). Mätningen är inget bygge, men den belastar
@@ -110,7 +128,8 @@ utvecklingsservern, bygge från tom katalog:
   körde hela motorn och fångade därför en del som motorns egna tester inte gör; det fullständiga bygget på
   synkgrenarna (ovan) kör dem fortfarande.
 - Bygget utan GTK är grönt i CI på macOS och Windows (grenen `chore/drop-gtk-build`, 2026-11-27).
-- Med mätverktyget från steg 1 tillkommer `test-gcse-bench` (bara på Linux): **92 av 92**.
+- Med mätverktyget från steg 1 tillkommer `test-gcse-bench` (bara på Linux): **92 av 92**. Efter steg 2 har
+  `test-gnc-se` 72 testfall.
 
 ### Med GTK (till och med 2026-11-27)
 
