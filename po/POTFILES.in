@@ -579,6 +579,7 @@ libgnucash/backend/sql/gnc-owner-sql.cpp
 libgnucash/backend/sql/gnc-price-sql.cpp
 libgnucash/backend/sql/gnc-recurrence-sql.cpp
 libgnucash/backend/sql/gnc-schedxaction-sql.cpp
+libgnucash/backend/sql/gnc-se-sql.cpp
 libgnucash/backend/sql/gnc-slots-sql.cpp
 libgnucash/backend/sql/gnc-sql-backend.cpp
 libgnucash/backend/sql/gnc-sql-column-table-entry.cpp
