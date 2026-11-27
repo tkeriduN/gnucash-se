@@ -211,13 +211,16 @@ public:
     }
 
 private:
-    GncSqlResultPtr select (const std::string& sql) const
+    /* The backend hands out its results as plain pointers that the
+     * caller owns. */
+    std::unique_ptr<GncSqlResult> select (const std::string& sql) const
     {
         if (!m_sql_be)
             return nullptr;
         auto statement {m_sql_be->create_statement_from_sql (sql)};
-        return statement ? m_sql_be->execute_select_statement (statement)
-                         : nullptr;
+        return std::unique_ptr<GncSqlResult> {
+            statement ? m_sql_be->execute_select_statement (statement)
+                      : nullptr};
     }
 
     bool execute (const std::string& sql) const
