@@ -1,14 +1,19 @@
 # GnuCash SE
 
 GnuCash SE är en fristående variant av [GnuCash](https://www.gnucash.org) för svenska aktiebolag (K2) och
-enskilda firmor (K1). SE står för Swedish Edition och på sikt Server Edition. Här byggs det som svensk lag kräver
-men som inte passar in i GnuCash själv:
+enskilda firmor (K1). SE står för Swedish Edition och Server Edition: ett serverprogram med webbklient, byggt
+runt GnuCash bokföringsmotor, som körs som tjänst för flera samtidiga användare eller lokalt på en dator. Här
+byggs det som svensk lag kräver men som inte passar in i GnuCash själv:
 
 - fasta lås: bokförda poster går inte att ändra eller radera (BFNAR 2.1),
 - obrutna verifikationsserier som systemet kan kontrollera (BFNAR 5.9–5.10),
 - rättelse bara genom rättelseverifikation med hänvisning åt båda håll (5 kap. 5 § BFL, BFNAR 2.17–2.18),
 - behandlingshistorik (5 kap. 11 § BFL, BFNAR 9.16),
-- senare: SRU, momsdeklaration (eSKD), iXBRL och byte mellan BAS-årgångar med bekräftade matchningar.
+- räkenskapsår per bok (3 kap. BFL),
+- på väg: API, webbklient, underlag, moms (eSKD), fakturor; senare SRU, iXBRL och byte mellan BAS-årgångar.
+
+Det som är byggt i dag är motorn (`libgnucash/se`). GnuCash GTK-program byggs inte längre i forken, och
+webbklienten finns inte än; se [`fardplan.md`](fardplan.md).
 
 Upstreams underhållare har bedömt att lås och verifikationsnumrering inte passar GnuCash övergripande design
 (John Ralls på gnucash-devel 2026-11-26). GnuCash SE är därför ett fristående projekt med egen inriktning.
@@ -45,7 +50,9 @@ git merge upstream/future          # merge, inte rebase: grenen är delad
 
 Forkens ändringar hålls små och avgränsade så att synkningarna blir billiga: egna filer och moduler hellre än
 ändringar mitt i upstreams kod. Varje ändring i en upstreamfil förs in i
-[`avvikelser-mot-upstream.md`](avvikelser-mot-upstream.md).
+[`avvikelser-mot-upstream.md`](avvikelser-mot-upstream.md). Katalogen `gnucash/` (GTK-programmet) byggs inte och
+hålls identisk med upstream. På synkgrenarna (`chore/sync-upstream-…`) bygger CI dessutom hela GnuCash med GTK,
+som kontroll av att det som togs in fortfarande bygger och klarar upstreams egna tester.
 
 ## Bokformat
 
@@ -64,10 +71,14 @@ fel; se [`design/01-las-och-numrering.md`](design/01-las-och-numrering.md).
 | [`avvikelser-mot-upstream.md`](avvikelser-mot-upstream.md) | allt forken ändrar i upstreams filer |
 | [`byggmiljo.md`](byggmiljo.md) | bygga och testa forken |
 | [`design/`](design/) | designskisser, en per funktion: 01 lås och numrering, 02 rättelseverifikation, 03 behandlingshistorik, 04 räkenskapsår |
+| [`../se/README.md`](../se/README.md) | katalogen för server, API och webbklient, och dess licens |
 
 Kontoplanen BAS läggs inte in i forken innan rättighetsfrågan är utredd (se `svenska-krav.md`, avsnitt B4).
 
 ## Licens
 
-Samma som GnuCash: GNU General Public License, version 2 eller version 3 (de flesta filer "version 2 eller
-senare"); detaljer i `LICENSE` i repots rot. Forkens egna filer licensieras som GnuCash.
+GnuCash-koden och SE-modulen i motorn (`libgnucash/se`): GNU General Public License, version 2 eller version 3
+(de flesta filer "version 2 eller senare"); detaljer i `LICENSE` i repots rot.
+
+Allt under `se/` (kommandolager, server, kommandoradsklient, webbklient): GNU Affero General Public License,
+version 3 eller senare; se [`../se/README.md`](../se/README.md). Bara fri programvara används som beroende.

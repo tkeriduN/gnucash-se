@@ -5,6 +5,9 @@ Status: **steg 1 byggt 2026-11-26**: motorn i `libgnucash/se/` och gränssnittet
 Skissen granskades av Isak 2026-11-26; besluten står i avsnitt 9. Kodhänvisningar gäller
 `upstream/future` `515c96a83d` (2026-11-25).
 
+> **2026-11-27:** GTK-gränssnittet som beskrivs här är borttaget (steg 0 i [färdplanen](../fardplan.md)); motorn gäller oförändrat.
+> Avsnitten om gränssnitt och provkörning beskriver det som fanns till och med `50fe4e5fa7` och är förlaga för webbklienten.
+
 ## 1. Vad lagen kräver och vad funktionen ska göra
 
 | Krav | Källa (se `../svenska-krav.md`, avsnitt A) | Funktion i SE |

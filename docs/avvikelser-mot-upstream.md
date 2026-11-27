@@ -19,6 +19,13 @@ beteende.
    med upstreamprojektet.
 6. **Upstreams stil** i upstreamfiler (kodstil, commitrubriker `[Modul] Kort rubrik`), så att synkningarna
    blir enkla.
+7. **`gnucash/` byggs inte och ändras inte** (beslut 2026-11-27). GTK-programmet ligger kvar i trädet, exakt
+   som upstream har det, så att en merge av `upstream/future` aldrig ger konflikter där. CI-jobbet
+   "gnucash/ is identical to upstream" (`.github/workflows/se-ci.yml`) jämför katalogen mot merge-basen och
+   blir rött vid minsta skillnad. Behövs kod därifrån (t.ex. CSV-tolkarna) byggs den som källfiler i ett eget
+   mål under `se/`, utan att flyttas.
+8. **Ny kod ovanpå motorn ligger i `se/`** under AGPL-3.0-or-later (se `se/README.md`). `libgnucash/se`
+   kompileras in i motorn och har kvar GnuCash licens.
 
 ## Filer och kataloger som bara finns i forken
 
@@ -26,30 +33,36 @@ beteende.
 |---|---|---|
 | `docs/` | forkens dokumentation (upstream har `doc/`, som lämnas orörd) | ingen |
 | `libgnucash/se/` | låsdatum, verifikationsserier, numrering vid låsning, vakten, kontrollsummekedja, kontroll, tidsgränser, rättelseverifikation, behandlingshistorik och räkenskapsår (`gnc-se.h`, `gnc-se.hpp`, `gnc-se.cpp`), med tester i `test/`. Källorna kompileras in i `gnc-engine` | ingen (använder motorns publika funktioner samt `qofinstance-p.h` och `kvp-frame.hpp` för KVP) |
-| `gnucash/gnome/gnc-plugin-se.cpp`, `gnc-plugin-se.h`, `gnucash/ui/gnc-plugin-se.ui` | menyn Åtgärder → Bokföring med dialogerna, och kontrollen när en bok öppnas | liten: följer mönstret för `gnc-plugin-budget`; ändras insticksgränssnittet (`GncPlugin`) upstream måste filen följa med |
-| `util/se/gui-test/`, `util/se/containers/future-gui/` | provkörning av gränssnittet på virtuell skärm | ingen |
+| `se/` | forkens standardvärden för bygget (`cmake/SeDefaults.cmake`), licenstexten för AGPL och platsen för kommandolager, server, CLI och webbklient | ingen |
+| `.github/workflows/se-ci.yml` | forkens egna CI-jobb: kontrollen att `gnucash/` är orörd, och ett fullständigt bygge med GTK på grenar som heter `chore/sync-upstream-…` | ingen |
 | `util/se/` | byggcontainer för `future` (`future-env`, `containers/`). Ligger utanför `util_DIST` i `util/CMakeLists.txt` och kommer därför inte med i källtarbollen | ingen |
 
 ## Ändringar i upstreams filer
 
 | Fil | Ändring | Varför | Synkrisk | Sedan |
 |---|---|---|---|---|
+| `CMakeLists.txt` | `include (…/se/cmake/SeDefaults.cmake)` före `option()`-blocket, och `add_subdirectory (se)` efter `util` | Den första raden ger `WITH_GNUCASH` standardvärdet OFF (ett alternativ som redan är definierat behåller sitt värde), så att GTK-programmet inte byggs. Den andra bygger forkens egen kod | Liten: tre rader plus kommentarer. Byter upstream namn på alternativet eller tar bort det måste `SeDefaults.cmake` följa med | 2026-11-27 |
+| `.github/workflows/ci-tests.yml` | `ninja distcheck` är utbytt mot `ninja check` i Ubuntu-jobbet | `distcheck` vägrar köra utan `WITH_GNUCASH` (`common/cmake_modules/MakeDist.cmake`) | Liten: en rad. Övriga arbetsflöden (ASAN, Arch, macOS, Windows, coverage) är orörda och bygger utan GTK genom standardvärdet | 2026-11-27 |
 | `libgnucash/CMakeLists.txt` | `add_subdirectory (se)` och `${se_DIST}` | Bygger `libgnucash/se/` | Liten: två rader i en fil som sällan ändras | 2026-11-26 |
-| `po/POTFILES.in` | raderna för `libgnucash/se/gnc-se.cpp`, `gnucash/gnome/gnc-plugin-se.cpp` och `gnucash/ui/gnc-plugin-se.ui` | Filen skrivs om av bygget när en källfil med översättbara texter tillkommer | Liten: genereras om vid nästa bygge efter en synk | 2026-11-26 |
-| `po/sv.po` | ett block sist i filen med svenska översättningar av forkens texter | SE ska vara på svenska | Medel: upstream skriver om filen vid varje release. Blocket ligger sist och är märkt; efter en synk kontrolleras att det finns kvar (`msgfmt --check po/sv.po`) | 2026-11-26 |
+| `po/POTFILES.in` | raden för `libgnucash/se/gnc-se.cpp` | Filen skrivs om av bygget när en källfil med översättbara texter tillkommer | Liten: genereras om vid nästa bygge efter en synk | 2026-11-26 |
+| `po/sv.po` | ett block sist i filen med svenska översättningar av motorns SE-texter (64 st sedan GTK-texterna togs bort 2026-11-27) | SE ska vara på svenska | Medel: upstream skriver om filen vid varje release. Blocket ligger sist och är märkt; efter en synk kontrolleras att det finns kvar (`msgfmt --check po/sv.po`) | 2026-11-26 |
 | `libgnucash/engine/CMakeLists.txt` | `engine_se_SOURCES` läggs till i `gnc-engine`, och `libgnucash/se` i include-sökvägen | Låsen ska gälla för alla program som använder motorn, och motorn själv behöver fråga efter låsdatum och låsta transaktioner | Liten | 2026-11-26 |
 | `libgnucash/engine/gnc-engine.cpp` | `gnc_se_init()` i `gnc_engine_init_part1()` | Sätter vakten när motorn startas | Liten: en rad | 2026-11-26 |
-| `libgnucash/engine/qofbook.cpp` | `qof_book_uses_autoreadonly()` och `qof_book_get_autoreadonly_gdate()` räknar med låsdatumet (dagen efter är första öppna dag; den senare av de två trösklarna gäller) | Registret följer redan den här tröskeln: låsta rader går inte att redigera och datum i låst period nekas, utan ny gränssnittskod | Medel: två funktioner med flera anropare. Ändrar upstream tröskelns betydelse måste kroken ses över | 2026-11-26 |
+| `libgnucash/engine/qofbook.cpp` | `qof_book_uses_autoreadonly()` och `qof_book_get_autoreadonly_gdate()` räknar med låsdatumet (dagen efter är första öppna dag; den senare av de två trösklarna gäller) | Registret följer redan den här tröskeln: låsta rader går inte att redigera och datum i låst period nekas, utan ny gränssnittskod | Medel: två funktioner med flera anropare. Ändrar upstream tröskelns betydelse måste kroken ses över. Anroparna är GTK-registret; kroken ses över när kommandolagret byggs | 2026-11-26 |
 | `libgnucash/engine/gncInvoice.c` | `gncInvoiceUnpost()` returnerar FALSE om fakturans transaktion eller en länktransaktion i dess lot är låst | Avregistrering tar bort transaktionerna; utan kroken stoppade vakten borttagningen men fakturan markerades ändå som ej bokförd | Liten: ett block före funktionens arbete | 2026-11-26 |
 | `libgnucash/engine/Account.cpp` | `xaccAccountDestroy()` raderar inte ett konto som har låsta transaktioner (eget eller underkontons) | Kontoradering tar bort kontots splits även ur skrivskyddade transaktioner | Liten | 2026-11-26 |
 | `libgnucash/app-utils/gnc-sx-instance-model.c` | `create_transactions_for_instance()` skapar inget om förekomstens datum är låst, och lägger ett besked i fellistan | En schemalagd transaktion ska inte hamna i låst period | Liten | 2026-11-26 |
-| `gnucash/register/register-gnome/datecell-gnome.c`, `gnucash/register/ledger-core/split-register.c` | annan text i dialogen "Cannot store a transaction at this date" när det är låsdatumet som stoppar | Den ärvda texten hänvisar till en inställning som inte är orsaken | Liten: bara text | 2026-11-26 |
-| `gnucash/gnome/dialog-invoice.c` | besked när en faktura inte kan avregistreras för att den är låst | Annars händer ingenting när användaren väljer Avregistrera | Liten | 2026-11-26 |
-| `gnucash/gnome/gnc-plugin-page-register.cpp`, `gnucash/gnome/gnc-split-reg.c` | kommandot för omvänd transaktion anropar `gnc_plugin_se_correct_transaction()` när transaktionen är låst | En bokförd transaktion rättas med en rättelseverifikation som bär signatur och anledning (design 02). `xaccTransReverse()` kan inte användas på en låst transaktion | Liten: ett block före den ärvda koden i två funktioner | 2026-11-26 |
-| `gnucash/gnome/top-level.c`, `gnucash/gnome/CMakeLists.txt`, `gnucash/CMakeLists.txt` | registrerar insticksmodulen `gnc-plugin-se` och dess ui-fil | Menyn Åtgärder → Bokföring | Liten: en rad per fil | 2026-11-26 |
 | `libgnucash/engine/Transaction.h`, `Transaction.cpp` | `GncTransCommitGuard`, `gnc_trans_set_commit_guard()` och ett anrop först i `xaccTransCommitEdit()`: säger vakten nej rullas redigeringen tillbaka med `xaccTransRollbackEdit()` | Enda sättet att stoppa ändring och radering av låsta transaktioner oavsett vem som anropar motorn. Utan registrerad vakt ändras ingenting | Medel: `xaccTransCommitEdit()` är central. Blocket ligger först i funktionen och rör ingen befintlig rad | 2026-11-26 |
 | `libgnucash/engine/Transaction.cpp` | `xaccTransSetDatePostedGDate()` öppnar och stänger en redigeringsomgång runt hela funktionen | Funktionen skrev datumet till KVP (`date-posted`) *före* `xaccTransBeginEdit()`. Kopian som en återställning utgår från hade då redan det nya datumet, så ett nekat datumbyte låg kvar i KVP. Det är ett fel även utan SE | Liten: två rader. Kan försvinna om upstream rättar samma sak | 2026-11-26 |
 | `libgnucash/engine/qofsession.h`, `qofsession.cpp` | `qof_session_load_in_progress()` och en räknare runt de två anropen av `m_backend->load()` | En backend som läser in en bok skapar transaktionerna genom samma `Begin/CommitEdit` som en redigering. Vakten måste kunna skilja inläsning från redigering | Liten: räknaren rör inget annat | 2026-11-26 |
+
+## Borttaget 2026-11-27
+
+När GTK-programmet togs ur bygget återställdes alla krokar under `gnucash/` till upstreams innehåll:
+`datecell-gnome.c`, `split-register.c`, `dialog-invoice.c`, `gnc-plugin-page-register.cpp`, `gnc-split-reg.c`,
+`top-level.c` och de två CMake-filerna. Insticksmodulen `gnc-plugin-se` (menyn Åtgärder → Bokföring) och
+provkörningen på virtuell skärm (`util/se/gui-test/`, `util/se/containers/future-gui/`) togs bort. Koden finns
+kvar i historiken (sista commit med den: `50fe4e5fa7`) som förlaga för webbklienten.
 
 ## Ändrat beteende utan kodändring
 
