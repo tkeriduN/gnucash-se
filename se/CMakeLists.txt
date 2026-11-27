@@ -9,5 +9,6 @@
 # server, cli, web, api, test.
 
 if (WITH_SE_SERVER)
+  add_subdirectory (core)
   add_subdirectory (tools)
 endif()

@@ -66,8 +66,11 @@ Utvecklingsservern delas med produktionssiter: högst 4 jobb och ett bygge i tag
 
 ```sh
 cd .build/future
-../../util/se/future-env ../../util/se/pg-env ctest -R test-backend-dbi --output-on-failure
+../../util/se/future-env ../../util/se/pg-env \
+    ctest -R "test-backend-dbi|test-gnc-se|test-gcse-core" --output-on-failure
 ```
+
+Samma sak körs i CI-jobbet "GnuCash SE with PostgreSQL" (`se-ci.yml`).
 
 **Mät i ett optimerat bygge.** Standardbygget i `.build/future` har ingen byggtyp och därmed ingen
 kompilatoroptimering; det är bra för felsökning men flera gånger långsammare i allt som är beräkning.
@@ -128,8 +131,9 @@ utvecklingsservern, bygge från tom katalog:
   körde hela motorn och fångade därför en del som motorns egna tester inte gör; det fullständiga bygget på
   synkgrenarna (ovan) kör dem fortfarande.
 - Bygget utan GTK är grönt i CI på macOS och Windows (grenen `chore/drop-gtk-build`, 2026-11-27).
-- Med mätverktyget från steg 1 tillkommer `test-gcse-bench` (bara på Linux): **92 av 92**. Efter steg 2 har
-  `test-gnc-se` 72 testfall.
+- Med mätverktyget från steg 1 tillkommer `test-gcse-bench` och med kommandolagret från steg 3
+  `test-gcse-core` (båda bara på Linux): **93 av 93**. `test-gnc-se` har 72 testfall, `test-gcse-core` 20
+  (30 när det körs genom `pg-env`, då också mot PostgreSQL).
 
 ### Med GTK (till och med 2026-11-27)
 

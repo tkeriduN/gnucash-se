@@ -62,3 +62,38 @@ jobs:
         with:
           name: TestLog-full
           path: ${{ github.workspace }}/build/Testing/Temporary/LastTest.log
+  postgresql:
+    # The server keeps its books in PostgreSQL. The engine's own database
+    # tests, GnuCash SE's module and the command layer are run against a
+    # server that util/se/pg-env starts for the occasion.
+    name: GnuCash SE with PostgreSQL
+    runs-on: ubuntu-26.04
+    env:
+      TZ: America/Los_Angeles
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - run: sudo apt-get update
+      - name: Install additional dependencies
+        run: sudo apt-get install -y gettext cmake libxslt-dev xsltproc ninja-build libboost-all-dev libgtk-3-dev guile-2.2-dev libgwengui-gtk3-dev libaqbanking-dev libofx-dev libdbi-dev libdbd-sqlite3 libwebkit2gtk-4.1-dev  googletest libdbd-pgsql postgresql postgresql-client
+      - name: Stop the server that the package starts
+        run: sudo systemctl stop postgresql || true
+      - name: Configure
+        run: |
+          mkdir build
+          cd build
+          cmake -G Ninja $GITHUB_WORKSPACE
+      - name: Build
+        run: |
+          cd build
+          ninja
+          ninja test-backend-dbi test-gnc-se test-gcse-core
+      - name: Test with PostgreSQL
+        run: |
+          cd build
+          sudo ../util/se/pg-env ctest -R "test-backend-dbi|test-gnc-se|test-gcse-core|test-gcse-bench" --output-on-failure
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: TestLog-postgresql
+          path: ${{ github.workspace }}/build/Testing/Temporary/LastTest.log

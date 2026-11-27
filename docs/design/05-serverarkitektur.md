@@ -413,9 +413,8 @@ Faller två eller fler gränser vid K1 byts motorn bakom API:t.
 Webbklientens start får aldrig överstiga 3 sekunder. Därför hålls bokvärdarna igång (4.1), och "kallstart"
 är inte längre ett eget mått.
 
-**Kvar att fastställa:** gränsen för minne. Eftersom stora böcker ligger kvar i minnet är det minnet som
-avgör hur många företag en server rymmer: efter steg 2 uppmätt till 108 MB för 10 000 verifikationer och
-456 MB för 50 000. Förslag: högst 200 MB vid 10 000 verifikationer och högst 500 MB vid 50 000.
+**Minnesgränsen (Isak 2026-11-27):** högst 200 MB vid 10 000 verifikationer och högst 500 MB vid 50 000
+gäller som utgångsläge. Uppmätt efter steg 2: 108 MB respektive 456 MB.
 
 ## 8. Kända begränsningar i mätningen
 

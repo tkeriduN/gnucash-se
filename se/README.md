@@ -10,7 +10,7 @@ Här ligger allt som GnuCash SE lägger ovanpå bokföringsmotorn. Katalogen fin
 | Katalog | Innehåll | Status |
 |---|---|---|
 | `cmake/` | forkens standardvärden för bygget (`SeDefaults.cmake`) | finns |
-| `core/` | kommandolagret: typade kommandon och frågor ovanpå motorn | planerat |
+| `core/` | kommandolagret `gcse-core`: ett företags bokföring som kommandon och frågor, det enda som anropar motorn ([design 07](../docs/design/07-kommandolager.md)) | finns |
 | `server/` | bokvärd och gateway (HTTP, inloggning, behörighet) | planerat |
 | `cli/` | kommandoradsklienten `gcse` | planerat |
 | `web/` | webbklienten (SvelteKit) | planerat |
